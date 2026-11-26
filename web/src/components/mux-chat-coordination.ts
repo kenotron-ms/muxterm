@@ -9,6 +9,8 @@ import '../ui/button.js';
 import '../ui/range-field.js';
 import '../ui/select.js';
 import '../ui/text-area.js';
+import '../ui/text-field.js';
+import '../ui/switch.js';
 import './work-goal-review.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import type { MuxUISelect } from '../ui/select.js';
@@ -17,9 +19,10 @@ import type { MuxUITextArea } from '../ui/text-area.js';
 type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; choiceSource?: string; goalMode?: 'native' | 'muxterm-work'; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped' };
-type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; harness?: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
+type WorkCompletion = {reason: string; resolutions?: {id: string; status: string; reason: string}[]; reviewedUnreadComments?: boolean};
+type WorkUpdate = { completion?: WorkCompletion; id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; harness?: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
 type WorkChatGoal = { requestedRevision:number; appliedRevision:number; controlVersion:number; state:string; humanPaused:boolean; receipts:{id:string; action:string; status:string; detail?:string}[] };
-type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalReplacement?: { clientRef:string; condition:string; workRevision:number; controlVersion:number }; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
+type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalReplacement?: { clientRef:string; condition:string; workRevision:number; controlVersion:number }; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphId?: string; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 type DetailTab = 'description' | 'people' | 'plan' | 'activity';
 const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownership' | 'plan' | 'clock' }[] = [
@@ -236,6 +239,9 @@ export class MuxChatCoordination extends LitElement {
     .activity-markdown .md-table { border-collapse:collapse; }
     .activity-markdown .md-th,.activity-markdown .md-td { padding:var(--ui-space-2) var(--ui-space-3); border-bottom:var(--ui-space-px) solid var(--ui-border); text-align:left; }
     .activity-markdown .md-h { margin:var(--ui-space-4) 0 var(--ui-space-2); font-size:var(--ui-text-lg); }
+    .completion-form { display:grid; gap:var(--ui-space-3); padding:var(--ui-space-3); border:1px solid var(--ui-border); border-radius:var(--ui-radius-md); overflow-wrap:anywhere; }
+    .completion-form fieldset { display:grid; gap:var(--ui-space-3); min-width:0; margin:0; border:1px solid var(--ui-border); }
+    .completion-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:var(--ui-space-2); }
     .activity-evidence { margin-top:var(--ui-space-3); font-size:var(--ui-text-md); }
     .comment-form { margin-top:var(--ui-space-6); display:grid; gap:var(--ui-space-3); }
     .comment-form mux-ui-text-area { width:100%; }
@@ -567,6 +573,7 @@ export class MuxChatCoordination extends LitElement {
     this.navigationNotice = notice;
     this.error = '';
     if (this.detail?.id !== item.id) {
+      this.completionItem = undefined;
       this.commentDraft = '';
       this.commentPriority = 'normal';
       this.commentRef = '';
@@ -670,6 +677,102 @@ export class MuxChatCoordination extends LitElement {
     const finished = other.filter(item => item.status === 'done' || item.status === 'cancelled');
     return html`<nav class="filters" aria-label="Work filter">${(['open','all','finished'] as const).map(filter => html`<mux-ui-button class="filter" variant="quiet" size="small" ?selected=${this.filter === filter} @click=${() => { this.filter = filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Finished'}</mux-ui-button>`)}${labels.length ? html`<mux-ui-select class="label-filter" size="small" aria-label="Filter by label" .value=${this.labelFilter} .options=${[{value:"",label:"All labels"},...labels.map(label => ({value:label,label}))]} @change=${(event: Event) => { this.labelFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>` : nothing}</nav>${this.controls()}${attention.length ? html`<section class="attention" aria-label="Needs your attention">${attention.map(item => html`<div class="attention-item"><span class=${`kind ${item.status === 'review' ? 'review' : item.status === 'blocked' ? 'blocked' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" accessible-label=${`Open ${item.reference || 'Work item'}: ${item.title}`} @click=${() => this.openDetail(item)}>${item.reference ? html`<span class="work-reference">${item.reference}</span>` : nothing}<h3>${item.title}</h3></mux-ui-button><p>${this.summary(item)}</p></div>`)}</section>` : nothing}${this.group('In motion','motion',motion)}${this.group('Ready to start','ready',ready)}${this.group('Waiting & blocked','waiting',waiting)}${this.group('Finished','finished',finished)}${!selected.length ? html`<div class="empty"><strong>${this.work.length ? 'Nothing in this view' : 'No work here yet'}</strong><p>${this.work.length ? 'Try another filter.' : 'Ask a chat to capture an item for this project.'}</p></div>` : nothing}`;
   }
+  @state() private completionItem?: WorkItem;
+  @state() private completionError = '';
+  @state() private completing = false;
+
+  private async submitCompletion(event: SubmitEvent, item: WorkItem) {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const reviewedUnreadComments = form.querySelector('mux-ui-switch')?.checked === true;
+    const resolutions = this.remainingSteps(item).map(step => ({
+      id: step.id, status: data.get(`status-${step.id}`), reason: data.get(`reason-${step.id}`),
+    }));
+    const evidence = String(data.get('evidence') ?? '').split('\n').map(line => line.trim()).filter(Boolean);
+    await this.completeWork(item, {
+      reason: String(data.get('reason') ?? ''), resolutions, evidence, reviewedUnreadComments,
+    });
+  }
+
+  private async completeWork(item: WorkItem, completion?: {
+    reason: string; resolutions: {id:string;status:FormDataEntryValue | null;reason:FormDataEntryValue | null}[];
+    evidence: string[]; reviewedUnreadComments: boolean;
+  }) {
+    if (this.completing) return;
+    const details = completion ?? {
+      reason: 'Marked complete from Work details.',
+      resolutions: this.remainingSteps(item).map(step => ({
+        id: step.id, status: 'skipped', reason: 'Closed by a human with this step unfinished.',
+      })),
+      closedWithoutReview: true,
+    };
+    this.completing = true;
+    this.completionError = '';
+    try {
+      const updated = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(item.id)}/complete`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({clientRef: crypto.randomUUID(), expectedRevision: item.revision,
+          ...details}),
+      });
+      if (this.detail?.id === item.id) {
+        this.detail = updated;
+        this.selectTab('activity');
+      }
+      this.completionItem = undefined;
+      void this.refresh();
+    } catch (error) {
+      if (completion) this.completionError = String(error);
+      else this.navigationNotice = String(error);
+      void this.refresh();
+    } finally {
+      this.completing = false;
+    }
+  }
+
+  private remainingSteps(item: WorkItem) {
+    return (item.plan || []).filter(step => step.status !== 'done' && step.status !== 'skipped');
+  }
+
+  private completionForm(item: WorkItem) {
+    const remaining = this.remainingSteps(item);
+    const comments = item.ownerSessionId ? this.unreadComments(item) : [];
+    const resolved = (item.plan || []).filter(step => !remaining.includes(step));
+    const reports = (item.updates || []).filter(update => update.outcome || update.evidence?.length);
+    return html`<form class="completion-form" @submit=${(event: SubmitEvent) => void this.submitCompletion(event, item)}>
+      <h3>Mark complete</h3>
+      ${item.outcome || reports.length ? html`<section>
+        <h4>Previously reported</h4>
+        ${item.outcome ? html`<p>${item.outcome}</p>` : nothing}
+        <ul>${reports.map(update => html`<li>${this.actor(update.actor)} · ${this.date(update.at)}
+          ${update.outcome && update.outcome !== item.outcome ? html`<p>${update.outcome}</p>` : nothing}
+          ${update.evidence?.map(reference => html`<p>${reference}</p>`)}
+        </li>`)}</ul>
+      </section>` : nothing}
+      ${resolved.length ? html`<ul aria-label="Previously resolved steps">${resolved.map(step => html`<li>${step.title} · ${step.status === 'done' ? 'Done' : 'Skipped'}</li>`)}</ul>` : nothing}
+      ${remaining.map(step => html`<fieldset>
+        <legend>${step.title} · ${step.status.replace('_', ' ')}</legend>
+        <mux-ui-select label="Resolution" required name=${`status-${step.id}`} .options=${[
+          {value:'', label:'Choose a resolution'}, {value:'done', label:'Done'}, {value:'skipped', label:'Skipped'},
+        ]}></mux-ui-select>
+        <mux-ui-text-field label="Step reason" required name=${`reason-${step.id}`}></mux-ui-text-field>
+      </fieldset>`)}
+      ${comments.length ? html`<section>
+        <h4>Comments unread by the owner</h4>
+        <ul>${comments.map(comment => html`<li><strong>${this.actor(comment.actor)}</strong><p>${comment.text}</p></li>`)}</ul>
+        <mux-ui-switch layout="row" label="I reviewed these comments" description="They will remain unread for the owner."></mux-ui-switch>
+      </section>` : nothing}
+      <mux-ui-text-area label="Completion reason" required name="reason" .maxLength=${4096} .rows=${3}></mux-ui-text-area>
+      <mux-ui-text-area label=${item.graphId ? 'Verification evidence' : 'New verification evidence (optional)'}
+        ?required=${!!item.graphId} name="evidence" .rows=${2} placeholder="One reference per line"></mux-ui-text-area>
+      ${this.completionError ? html`<p role="alert">${this.completionError}</p>` : nothing}
+      <div class="completion-actions">
+        <mux-ui-button variant="quiet" ?disabled=${this.completing} @click=${() => { this.completionItem = undefined; }}>Cancel</mux-ui-button>
+        <mux-ui-button variant="primary" ?disabled=${this.completing} @click=${(event: Event) => (event.currentTarget as HTMLElement).closest('form')?.requestSubmit()}>${this.completing ? 'Completing…' : 'Confirm completion'}</mux-ui-button>
+      </div>
+    </form>`;
+  }
+
   private timelineEntry(update: WorkUpdate, item: WorkItem) {
     if (update.comment) {
       const unread = this.unreadComments(item).some(comment => comment.id === update.id);
@@ -679,17 +782,20 @@ export class MuxChatCoordination extends LitElement {
       return html`<li><span class="timeline-icon">${icon('chat')}</span><div><time>${this.date(update.at)}</time><strong>Comment from ${this.actor(update.actor)} ${source}</strong><div class="comment-meta"><span class=${`comment-priority ${update.commentPriority === 'high' ? 'high' : ''}`}>${update.commentPriority === 'high' ? 'High priority' : 'Normal priority'}</span><span>${!item.ownerSessionId ? 'Awaiting owner' : unread ? 'Unread by owner' : 'Read by owner'}</span>${notice ? html`<span>Check-comments steer ${notice}</span>` : nothing}${boundary ? html`<span>${boundary === 'pending' ? 'Notice pending for next owner turn' : 'Next-turn notice sent'}</span>` : nothing}</div><p class="comment-body">${update.text}</p></div></li>`;
     }
     const mark = update.status === 'done' || update.status === 'review' || update.goalApproved ? 'check' : update.status === 'blocked' ? 'alert' : update.status === 'active' ? 'play' : update.readiness === 'ready' ? 'flag' : update.linkedSessionId || update.ownerSessionId ? 'chat' : 'clock';
-    const title = update.planAfter ? `Plan revised by ${this.actor(update.actor)}` : update.commentReadThrough ? 'Comments marked read' : update.commentNoticeState === 'next-turn-sent' || update.commentNoticeState === 'routine-sent' ? 'Next-turn comment notice delivered' : update.commentNoticeState ? `Check-comments steer ${update.commentNoticeState}` : update.goalApproved ? 'Goal approved' : update.goalCondition ? 'Goal drafted' : update.status === 'done' ? 'Work completed' : update.status === 'blocked' ? 'Blocked' : update.status === 'review' ? 'Ready for review' : update.status === 'active' ? 'Work started' : update.status ? 'Work updated' : update.readiness === 'ready' ? 'Marked ready' : update.readiness === 'held' ? 'Put on hold' : html`Update from ${this.actor(update.actor)}`;
+    const title = update.planAfter ? `Plan revised by ${this.actor(update.actor)}` : update.commentReadThrough ? 'Comments marked read' : update.commentNoticeState === 'next-turn-sent' || update.commentNoticeState === 'routine-sent' ? 'Next-turn comment notice delivered' : update.commentNoticeState ? `Check-comments steer ${update.commentNoticeState}` : update.goalApproved ? 'Goal approved' : update.goalCondition ? 'Goal drafted' : update.status === 'done' ? update.completion ? 'Marked complete by a human' : 'Work completed' : update.status === 'blocked' ? 'Blocked' : update.status === 'review' ? 'Ready for review' : update.status === 'active' ? 'Work started' : update.status ? 'Work updated' : update.readiness === 'ready' ? 'Marked ready' : update.readiness === 'held' ? 'Put on hold' : html`Update from ${this.actor(update.actor)}`;
     const body = update.text || update.progress || update.outcome || update.blockedReason || '';
     const summary = update.summary?.trim() || activityPreview(body);
-    const expanded = !!body && (!!update.summary && update.summary.trim() !== body.trim() || body.length > 160 || body.includes('\n'));
+    const expanded = !!body && !update.completion && (!!update.summary && update.summary.trim() !== body.trim() || body.length > 160 || body.includes('\n'));
     const fallback = update.goalCondition ? 'Condition ready for review.' : update.ownerSessionId ? html`Claimed by ${this.chatLink(update.ownerSessionId)}` : update.linkedSessionId ? html`Linked ${this.chatLink(update.linkedSessionId)}` : update.readiness ? `Readiness: ${update.readiness}` : 'Record updated';
-    const evidence = update.evidence?.length ? html`<p class="activity-evidence">Evidence: ${update.evidence.join(', ')}</p>` : nothing;
+    const evidence = update.evidence?.length ? html`<p class="activity-evidence">${update.completion ? 'New verification evidence' : 'Evidence'}: ${update.evidence.join(', ')}</p>` : nothing;
     const content = expanded
       ? html`<p class="activity-summary">${summary}</p><details class="activity-full"><summary>Read full update</summary><div class="activity-markdown">${renderSegments(parseMarkdown(body))}${evidence}</div></details>`
       : body ? html`<div class="activity-markdown">${renderSegments(parseMarkdown(body))}${evidence}</div>`
         : html`<p class="activity-summary">${summary || fallback}</p>${evidence}`;
-    const planChange = update.planAfter ? html`<p>Reason: ${update.planReason}</p><p>Before: ${(update.planBefore || []).map(step => `${step.title} (${step.status})`).join(' · ') || 'No plan'}</p><p>After: ${update.planAfter.map(step => `${step.title} (${step.status})`).join(' · ')}</p>` : update.stepUpdates?.length ? html`<p>Steps: ${update.stepUpdates.map(change => `${change.id} → ${change.status.replace('_',' ')}`).join(' · ')}</p>` : nothing;
+    const planChange = update.completion ? html`
+      ${update.completion.resolutions?.map(resolution => html`<p>${item.plan?.find(step => step.id === resolution.id)?.title || resolution.id} · ${resolution.status === 'done' ? 'Done' : 'Skipped'}<br>${resolution.reason}</p>`)}
+      ${update.completion.reviewedUnreadComments ? html`<p>Human reviewed comments still unread by the owner.</p>` : nothing}
+    ` : update.planAfter ? html`<p>Reason: ${update.planReason}</p><p>Before: ${(update.planBefore || []).map(step => `${step.title} (${step.status})`).join(' · ') || 'No plan'}</p><p>After: ${update.planAfter.map(step => `${step.title} (${step.status})`).join(' · ')}</p>` : update.stepUpdates?.length ? html`<p>Steps: ${update.stepUpdates.map(change => `${change.id} → ${change.status.replace('_',' ')}`).join(' · ')}</p>` : nothing;
     return html`<li><span class="timeline-icon">${icon(mark)}</span><div><time>${this.date(update.at)}</time><strong>${title}</strong>${content}${planChange}</div></li>`;
   }
   private detailView() {
@@ -715,10 +821,27 @@ export class MuxChatCoordination extends LitElement {
       ${this.graphProgress(item)}
       ${this.navigationNotice ? html`<p role="status">${this.navigationNotice}</p>` : nothing}
       ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
+      ${this.completionItem?.id === item.id && item.status !== 'done' && item.status !== 'cancelled' ? this.completionForm(this.completionItem)
+        : item.status !== 'done' && item.status !== 'cancelled' ? html`
+          <mux-ui-button variant="secondary" ?disabled=${this.completing || !Array.isArray(item.updates)} @click=${() => {
+            this.navigationNotice = '';
+            if (item.graphId) {
+              this.completionItem = item;
+              this.completionError = '';
+            } else {
+              void this.completeWork(item);
+            }
+          }}>Mark complete</mux-ui-button>
+        ` : nothing}
       <div class="detail-tabs" role="tablist" aria-label="Work item details">
         ${detailTabs.map(entry => html`<mux-ui-button id=${`work-tab-${entry.id}`} class="detail-tab" variant="quiet" control-role="tab" controls="work-detail-panel" ?tab-selected=${tab === entry.id} ?tab-stop=${tab === entry.id} @click=${() => this.selectTab(entry.id)} @keydown=${(event: KeyboardEvent) => this.onDetailTabKeydown(event, entry.id)}>${icon(entry.icon)}<span class="detail-tab-label">${entry.label}</span>${entry.id === 'plan' && planSteps.length ? html`<span class="detail-tab-count" aria-label=${`${planSteps.length} steps`}>${planSteps.length}</span>` : entry.id === 'activity' && (unreadCount || updates.length) ? html`<span class="detail-tab-count" aria-label=${unreadCount ? `${unreadCount} unread comments` : `${updates.length} updates`}>${unreadCount || updates.length}</span>` : nothing}</mux-ui-button>`)}
       </div>
       <div id="work-detail-panel" class="detail-panel" role="tabpanel" aria-labelledby=${`work-tab-${tab}`} tabindex="0">
+      ${tab === 'plan' && !this.completionItem && !item.graphId && item.status !== 'done' && item.status !== 'cancelled' ? html`
+        <mux-ui-button variant="quiet" size="small" ?disabled=${this.completing || !Array.isArray(item.updates)} @click=${() => {
+          this.completionItem = item;
+          this.completionError = '';
+        }}>Review checklist before closing</mux-ui-button>` : nothing}
       ${tab === 'description' ? html`
         ${item.goalObservation ? html`<p>Last observed chat goal: ${item.goalObservation.state}${item.goalObservation.summary ? html` · ${item.goalObservation.summary}` : nothing}</p>` : nothing}
         ${this.renderWorkChatGoal(item)}

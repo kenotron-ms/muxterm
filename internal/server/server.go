@@ -462,6 +462,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-work/{id}/start", protect(http.HandlerFunc(s.handleSDKWorkStart)))
 	s.mux.Handle("POST /api/sdk-work/{id}/dispatch/reset", protect(http.HandlerFunc(s.handleSDKWorkDispatchReset)))
 	s.mux.Handle("POST /api/sdk-work/{id}/updates", protect(http.HandlerFunc(s.handleSDKWorkUpdate)))
+	s.mux.Handle("POST /api/sdk-work/{id}/complete", protect(http.HandlerFunc(s.handleSDKWorkComplete)))
 	s.mux.Handle("POST /api/sdk-work/{id}/comments", protect(http.HandlerFunc(s.handleSDKWorkComment)))
 	s.mux.Handle("GET /api/sdk-work/{id}/comments/unread", protect(http.HandlerFunc(s.handleSDKWorkCommentsUnread)))
 	s.mux.Handle("POST /api/sdk-work/{id}/comments/ack", protect(http.HandlerFunc(s.handleSDKWorkCommentsAcknowledge)))
