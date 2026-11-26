@@ -59,7 +59,11 @@ func antigravityCLIPath() string {
 }
 
 func antigravityCLIAvailable() bool {
-	path, err := exec.LookPath(antigravityCLIPath())
+	return antigravityCLIMatchesVersion(antigravityCLIPath())
+}
+
+func antigravityCLIMatchesVersion(command string) bool {
+	path, err := exec.LookPath(command)
 	if err != nil || !antigravityBinaryMatchesHost(path) {
 		return false
 	}
@@ -80,8 +84,9 @@ func installAntigravityCLI(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(filepath.Join(dest, "agy")); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 && antigravityCLIAvailable() {
-		return nil
+	managed := filepath.Join(dest, "agy")
+	if antigravityCLIMatchesVersion(managed) {
+		return exposeAntigravityCLI(managed)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
 		return err
@@ -173,5 +178,28 @@ func installAntigravityCLI(ctx context.Context) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return os.Rename(tmp, dest)
+	if err := os.Rename(tmp, dest); err != nil {
+		return err
+	}
+	return exposeAntigravityCLI(managed)
+}
+
+// Publish the managed executable at Google's standard Unix CLI location,
+// preserving existing commands and every kind of existing directory entry.
+func exposeAntigravityCLI(managed string) error {
+	if _, err := exec.LookPath("agy"); err == nil {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		return err
+	}
+	if err := os.Symlink(managed, filepath.Join(bin, "agy")); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("expose Antigravity CLI in %s: %w", bin, err)
+	}
+	return nil
 }

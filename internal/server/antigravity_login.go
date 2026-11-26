@@ -34,7 +34,7 @@ type antigravityLoginStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
-var antigravityAuthURL = regexp.MustCompile(`https://accounts\.google\.com/o/oauth2/v2/auth\?[^\s\x00-\x20\x1b<>]+`)
+var antigravityAuthURL = regexp.MustCompile(`https://accounts\.google\.com/o/oauth2/(?:v2/)?auth\?[^\s\x00-\x20\x1b<>]+`)
 var antigravityANSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
 var antigravityAuthCode = regexp.MustCompile(`^[A-Za-z0-9/+_.=-]+$`)
 
@@ -395,7 +395,8 @@ func (s *Server) readAntigravityLogin(login *antigravityLogin) {
 				if len(login.output) > 32768 {
 					login.output = login.output[len(login.output)-32768:]
 				}
-				if match := antigravityAuthURL.FindString(login.output); match != "" {
+				if end := strings.LastIndexByte(login.output, '\n'); end >= 0 {
+					match := antigravityAuthURL.FindString(login.output[:end])
 					match = strings.TrimRight(match, ").,;]")
 					if target, parseErr := url.Parse(match); parseErr == nil && target.Scheme == "https" && target.Host == "accounts.google.com" {
 						login.url = match
