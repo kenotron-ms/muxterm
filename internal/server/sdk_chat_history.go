@@ -173,7 +173,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view := r.URL.Query().Get("view")
-	if view != "" && view != "messages" {
+	if view != "" && view != "messages" && view != "meta" {
 		http.Error(w, "invalid history view", 400)
 		return
 	}
@@ -222,6 +222,33 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if header.Type == "thinking.delta" {
+			continue
+		}
+		if view == "meta" {
+			switch header.Type {
+			case "input.accepted", "turn.started", "turn.completed", "turn.cancelled", "error", "session.uncertain",
+				"assistant.delta", "commentary.delta", "tool.started", "tool.completed", "usage.observed":
+				var event struct {
+					Type         string          `json:"type"`
+					At           time.Time       `json:"at"`
+					Kind         string          `json:"kind,omitempty"`
+					GenerationID string          `json:"generationId,omitempty"`
+					InputID      string          `json:"inputId,omitempty"`
+					InputIDs     []string        `json:"inputIds,omitempty"`
+					ToolID       string          `json:"toolId,omitempty"`
+					Model        string          `json:"model,omitempty"`
+					Raw          json.RawMessage `json:"raw,omitempty"`
+				}
+				if err := json.Unmarshal(line, &event); err != nil {
+					http.Error(w, "invalid history event", 500)
+					return
+				}
+				if event.Type != "usage.observed" {
+					event.Raw = nil
+				}
+				encoded, _ := json.Marshal(event)
+				events = append(events, encoded)
+			}
 			continue
 		}
 		if view != "messages" {

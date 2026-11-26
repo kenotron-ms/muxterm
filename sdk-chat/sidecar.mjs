@@ -256,6 +256,20 @@ async function runClaude(s) {
         for (const id of accepted) s.inFlightInputs.delete(id);
         if (s.cancelRequested || msg.subtype !== 'success') s.inFlightInputs.clear();
         s.busy = s.inFlightInputs.size > 0;
+        if (msg.usage) {
+          const { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens } = msg.usage;
+          emit(s.id, 'usage.observed', {
+            inputIds: accepted,
+            kind: 'result',
+            model: Object.keys(msg.modelUsage || {}).join(', '),
+            raw: {
+              inputTokens: [input_tokens, cache_read_input_tokens, cache_creation_input_tokens].every(Number.isSafeInteger)
+                ? input_tokens + cache_read_input_tokens + cache_creation_input_tokens : undefined,
+              outputTokens: output_tokens,
+              cachedInputTokens: cache_read_input_tokens,
+            },
+          });
+        }
         emit(s.id, s.cancelRequested || msg.subtype === 'interrupted' ? 'turn.cancelled'
           : msg.subtype === 'success' && !msg.is_error ? (s.busy ? 'turn.continued' : 'turn.completed') : 'error',
           { inputIds: accepted, message: msg.is_error ? msg.result || msg.subtype : msg.subtype });
