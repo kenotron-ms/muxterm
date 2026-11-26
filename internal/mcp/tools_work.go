@@ -276,7 +276,7 @@ func registerWorkTools(srv *Server) {
 			result, err := pt.chatRequest(args, http.MethodPost, "/api/sdk-work/"+url.PathEscape(id)+"/comments/ack", body)
 			return workToolResult(args, result, err)
 		})
-	srv.Register("start_work_item", "Manually ask Muxterm to dispatch a filed Work item when the project's scheduler is playing, has capacity, and dependencies are done. Muxterm selects a suitable goal-free chat or creates one, installs the filed condition as its native Chat Goal, durably assigns it as the owner before execution, and records a dispatch receipt. Inspect uncertain delivery before retrying. Reusing client_ref is idempotent.",
+	srv.Register("start_work_item", "Manually ask Muxterm to dispatch a filed Work item when the project's scheduler is playing, has capacity, and dependencies are done. Muxterm creates a fresh worker chat, durably assigns it as the owner before execution, and records a dispatch receipt. Recovery uses the worker chat recorded in the dispatch. Inspect uncertain delivery before retrying. Reusing client_ref is idempotent.",
 		map[string]any{"type": "object", "properties": withMachine(map[string]any{"work_id": stringProp, "client_ref": stringProp}), "required": []string{"work_id", "client_ref"}},
 		func(args map[string]any) (string, error) {
 			id, err := argString(args, "work_id")

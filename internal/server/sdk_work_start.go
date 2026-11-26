@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -203,27 +202,8 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		choiceSource = "AI default"
 	}
 	selectedRevision := item.Revision
-	related := h.workContextCandidatesLocked(item)
-	candidates := make([]sdkChat, 0)
-	for _, chat := range h.chats {
-		if h.eligibleWorkChatLocked(chat, item, projects, false) {
-			candidates = append(candidates, *chat)
-		}
-	}
 	h.mu.Unlock()
-	sort.Slice(candidates, func(i, j int) bool {
-		left, right := related[candidates[i].ID], related[candidates[j].ID]
-		if left != right {
-			return left < right
-		}
-		return candidates[i].ID < candidates[j].ID
-	})
-	goalReady := make(map[string]bool, len(candidates))
-	for _, chat := range candidates {
-		goal, err := h.goals.update(chat, nil)
-		goalReady[chat.ID] = err == nil && !goal.HumanPaused && goal.RequestedRevision == 0 && supportsWorkGoalControl(chat.Harness)
-	}
-	config, relatedChatID, contextWorkID, skipped, err := s.selectWorkConfiguration(r.Context(), selectedHarness, candidates, related, goalReady, projectPath)
+	config, err := s.selectWorkConfiguration(r.Context(), selectedHarness, projectPath)
 	if err != nil {
 		s.recordWorkSelectionFailure(id, req.ClientRef, selectedRevision, selectedHarness, choiceSource, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -261,20 +241,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projects = slices.Clone(h.workProjectIDsLocked(item))
-	workerID, existing := sdkID(), false
-	if relatedChatID != "" {
-		if h.workContextCandidatesLocked(item)[relatedChatID] != contextWorkID {
-			h.mu.Unlock()
-			http.Error(w, "related worker changed before dispatch; retry selection", 409)
-			return
-		}
-		if !h.eligibleWorkChatLocked(h.chats[relatedChatID], item, projects, false) || !goalReady[relatedChatID] {
-			h.mu.Unlock()
-			http.Error(w, "related worker is no longer ready; retry selection", 409)
-			return
-		}
-		workerID, existing = relatedChatID, true
-	}
+	workerID := sdkID()
 	actor := h.requestWorkActorLocked(r)
 	projectID := ""
 	if len(projects) > 0 {
@@ -282,16 +249,13 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	copy := *item
-	reason := "Created a fresh worker; no eligible completed prerequisite worker has compatible, goal-free task context."
-	if existing {
-		reason = "Reused this chat because it completed direct prerequisite Work " + contextWorkID + " and its configuration is compatible."
-	}
+	reason := "Created a fresh worker chat for this Work item."
 	configuration := config
 	goalMode := "native"
 	if config.Harness == "opencode" {
 		goalMode = "muxterm-work"
 	}
-	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, ContextWorkID: contextWorkID, Configuration: &configuration, ChoiceSource: choiceSource, GoalMode: goalMode, CreatedAt: now, UpdatedAt: now}
+	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, Configuration: &configuration, ChoiceSource: choiceSource, GoalMode: goalMode, CreatedAt: now, UpdatedAt: now}
 	setting := func(value string) string {
 		if value == "" {
 			return "none"
@@ -299,9 +263,6 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 		return value
 	}
 	selectionText := reason + " Choice source: " + choiceSource + ". Effective worker: " + config.Harness + "/" + config.Provider + ", bundle=" + setting(config.Bundle) + ", model=" + setting(config.Model) + ", effort=" + setting(config.Effort) + ". Goal control: " + goalMode + "."
-	if skipped != "" {
-		selectionText += " Related chats skipped: " + skipped + "."
-	}
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch:" + req.ClientRef, At: now, Actor: actor, Summary: "Worker selected", Text: selectionText, LinkedSessionID: workerID})
 	copy.Revision++
 	copy.UpdatedAt = now
@@ -312,25 +273,19 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	state, detail := "sent", ""
-	if existing {
-		if err := s.applyReusedWorkConfiguration(r.Context(), workerID, config); err != nil {
-			state, detail = "uncertain", err.Error()
+	payload, _ := json.Marshal(map[string]any{"WorkspaceID": projectID, "Harness": config.Harness, "Provider": config.Provider, "Bundle": config.Bundle, "Model": config.Model, "Effort": config.Effort, "Prompt": "Work: " + copy.Title, "WorkMode": "local"})
+	ctx := context.WithValue(r.Context(), workStartChatIDKey{}, workerID)
+	ctx = context.WithValue(ctx, workStartIdleChatKey{}, true)
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-chats", bytes.NewReader(payload))
+	response := httptest.NewRecorder()
+	s.handleSDKChats(response, request)
+	if response.Code != 201 {
+		state, detail = "uncertain", strings.TrimSpace(response.Body.String())
+		h.mu.Lock()
+		if h.chats[workerID] == nil {
+			state = "failed"
 		}
-	} else {
-		payload, _ := json.Marshal(map[string]any{"WorkspaceID": projectID, "Harness": config.Harness, "Provider": config.Provider, "Bundle": config.Bundle, "Model": config.Model, "Effort": config.Effort, "Prompt": "Work: " + copy.Title, "WorkMode": "local"})
-		ctx := context.WithValue(r.Context(), workStartChatIDKey{}, workerID)
-		ctx = context.WithValue(ctx, workStartIdleChatKey{}, true)
-		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-chats", bytes.NewReader(payload))
-		response := httptest.NewRecorder()
-		s.handleSDKChats(response, request)
-		if response.Code != 201 {
-			state, detail = "uncertain", strings.TrimSpace(response.Body.String())
-			h.mu.Lock()
-			if h.chats[workerID] == nil {
-				state = "failed"
-			}
-			h.mu.Unlock()
-		}
+		h.mu.Unlock()
 	}
 	if state == "sent" {
 		if config.Harness == "opencode" {
