@@ -89,21 +89,17 @@ step changes, progress, evidence, blockers, and outcome on Work. The goal ledger
 same condition, its Work filing or approval provenance, native receipt,
 and goal progress.
 
-The supported native goal harnesses are Codex, Claude, Copilot, and Amplifier.
-For a new worker, the scheduler checks the configured default harness and the
-runtime's available options. If that harness cannot run a native goal or its
-model catalog is unavailable, it tries Codex, Claude, Copilot, then Amplifier
-in that order. The catalog supplies the default bundle, provider, model, and
-supported reasoning effort; Codex uses medium effort when the model has no
-catalog default and offers medium, and Claude uses its high-effort runtime
-default. A related worker's existing harness and settings are checked against
-the current catalog and activated before reuse. If no compatible combination exists, dispatch returns
-a clear error without reserving the item. The Work dispatch and activity
-timeline state whether the worker was created or reused, the prerequisite
-that justified reuse, the effective settings, and any fallback reason. Work
-approval authorizes this one exact condition; it does not let the scheduler overwrite another goal or
-release a pause. The native goal ledger's `controlVersion` is fenced when
-installing the condition.
+Each new scheduler dispatch creates a fresh worker chat. Completed prerequisites
+make dependent Work eligible to run. Existing dispatch recovery uses the chat
+recorded on the dispatch.
+
+The scheduler checks the item's harness choice or the configured AI default
+against available Work harnesses. The model catalog supplies the default
+provider, bundle, model, and reasoning effort. If the chosen harness or settings
+are unavailable, the scheduler records a selection failure. The Work activity
+timeline records the effective settings and goal mode. Work approval authorizes
+the exact filed condition, and native goal installation checks the goal ledger's
+`controlVersion`.
 
 A dispatch is `preparing`, `sent`, `claimed`, `uncertain`, or `failed`. A native
 control or input whose acknowledgement is uncertain is never silently
