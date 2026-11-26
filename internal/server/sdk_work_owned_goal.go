@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -53,6 +54,7 @@ func (s *Server) resumeUnclaimedWorkKickoff(chatID string, controlVersion int) {
 	s.handleSDKControlSend(response, request)
 	var receipt struct {
 		Status string `json:"status"`
+		Detail string `json:"detail"`
 	}
 	accepted := response.Code == http.StatusAccepted && json.Unmarshal(response.Body.Bytes(), &receipt) == nil && receipt.Status == "accepted"
 	h.mu.Lock()
@@ -211,10 +213,61 @@ func (h *sdkChatHost) syncWorkOwnedTerminalGoalLocked(item *sdkWorkItem) {
 func (h *sdkChatHost) workContinuationEligibleLocked(workID, chatID, eventID string) bool {
 	item := h.workItems[workID]
 	chat := h.chats[chatID]
-	return item != nil && chat != nil && item.Status == "active" && item.OwnerSessionID == chatID &&
-		item.Dispatch != nil && item.Dispatch.GoalMode == "muxterm-work" &&
-		item.Dispatch.ContinuationEventID == eventID && item.Dispatch.ContinuationState == "preparing" &&
-		chat.State == "ready" && chat.LastTurnEventID == eventID && !chat.Archived
+	if item == nil || chat == nil || item.Status != "active" || item.OwnerSessionID != chatID ||
+		item.Dispatch == nil || item.Dispatch.ContinuationEventID != eventID || item.Dispatch.ContinuationState != "preparing" ||
+		chat.Archived {
+		return false
+	}
+	if strings.HasPrefix(eventID, "restart:") {
+		goal, err := h.goals.update(*chat, nil)
+		return err == nil && h.workRestartEventLocked(item, chat, goal) == eventID
+	}
+	if chat.State != "ready" || chat.LastTurnEventID != eventID {
+		return false
+	}
+	if item.Dispatch.GoalMode == "muxterm-work" {
+		return true
+	}
+	goal, err := h.goals.update(*chat, nil)
+	return err == nil && workGraphEvidencePending(item, chat, goal)
+}
+
+// Native completion is evidence about the chat, not the Work outcome. Give
+// the same worker one turn to file its result within the existing authority.
+func workGraphEvidencePending(item *sdkWorkItem, chat *sdkChat, goal goalDocument) bool {
+	return item.GraphID != "" && item.Dispatch.GoalMode == "native" && goal.State == "complete" &&
+		!goal.HumanPaused && goal.AppliedRevision == goal.RequestedRevision &&
+		goal.ExecutionAuthorizedRevision == goal.RequestedRevision && workGoalMatches(item, chat.ID, goal)
+}
+
+// Only chats found interrupted at server startup can receive a recovery
+// turn. The durable input receipt fences this specific interrupted turn.
+func (h *sdkChatHost) workRestartEventLocked(item *sdkWorkItem, chat *sdkChat, goal goalDocument) string {
+	if _, interrupted := h.workInterrupted[chat.ID]; !interrupted || chat.State != "uncertain" ||
+		chat.UpdateRecoveryUnix != 0 || item.GraphID == "" || item.Dispatch == nil ||
+		(item.Dispatch.State != "sent" && item.Dispatch.State != "claimed") ||
+		(!activeUpdateRecoveryGoal(goal) && !workGraphEvidencePending(item, chat, goal)) ||
+		!workGoalMatches(item, chat.ID, goal) {
+		return ""
+	}
+	return "restart:" + strconv.FormatInt(chat.TurnStartedAt.UnixNano(), 10)
+}
+
+// Resuming an adapter can wake the native goal before an explicit recovery
+// input is admitted. A new turn in the same authorized chat is enough proof.
+func (h *sdkChatHost) workRestartObservedLocked(item *sdkWorkItem, chat *sdkChat, eventID string) bool {
+	stamp, restart := strings.CutPrefix(eventID, "restart:")
+	if !restart || chat == nil || chat.Archived || item.Dispatch.GoalMode != "native" ||
+		(chat.State != "working" && chat.State != "ready") {
+		return false
+	}
+	started, err := strconv.ParseInt(stamp, 10, 64)
+	if err != nil || chat.TurnStartedAt.UnixNano() <= started {
+		return false
+	}
+	goal, err := h.goals.update(*chat, nil)
+	return err == nil && workGoalMatches(item, chat.ID, goal) &&
+		(activeUpdateRecoveryGoal(goal) || workGraphEvidencePending(item, chat, goal))
 }
 
 // A Muxterm-owned Work goal continues only after a durable completed turn. A
@@ -228,28 +281,46 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 	var reserved sdkWorkItem
 	var chatID, eventID string
 	for _, item := range h.workItems {
-		if item.Status != "active" || item.OwnerSessionID == "" || item.Dispatch == nil || item.Dispatch.GoalMode != "muxterm-work" || item.Dispatch.State == "starting" {
+		if item.Status != "active" || item.OwnerSessionID == "" || item.Dispatch == nil || item.Dispatch.State == "starting" {
 			continue
 		}
 		chat := h.chats[item.OwnerSessionID]
-		if chat == nil || chat.Archived || chat.State != "ready" || chat.LastTurnEventID == "" || chat.LastTurnEventID == item.Dispatch.ContinuationEventID {
+		if chat == nil || chat.Archived || (chat.State != "ready" && chat.State != "uncertain") {
 			continue
 		}
 		goal, err := h.goals.update(*chat, nil)
-		if err != nil || goal.Mode != "muxterm-work" || !workGoalMatches(item, chat.ID, goal) || goal.HumanPaused || goal.State == "paused" || goal.State == "cleared" {
+		if err != nil || goal.HumanPaused || goal.State == "paused" || goal.State == "cleared" {
 			continue
 		}
-		if goal.State != "active" || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision || goal.ExecutionAuthorizedRevision != goal.RequestedRevision {
-			s.blockWorkOwnedGoalLocked(item, "Muxterm Work goal is not active or its exact filed revision is uncertain; inspect the goal ledger before resuming.")
+		event := chat.LastTurnEventID
+		restart := chat.State == "uncertain"
+		if restart {
+			event = h.workRestartEventLocked(item, chat, goal)
+		}
+		if event == "" || event == item.Dispatch.ContinuationEventID {
 			continue
 		}
-		if item.Dispatch.ContinuationCount >= maxWorkOwnedContinuations {
-			s.blockWorkOwnedGoalLocked(item, "Muxterm Work goal reached its continuation limit without completion; inspect progress before resuming.")
+		switch {
+		case restart:
+		case workGraphEvidencePending(item, chat, goal):
+			if item.Dispatch.ContinuationCount != 0 {
+				continue
+			}
+		case item.Dispatch.GoalMode == "muxterm-work" && goal.Mode == "muxterm-work" && workGoalMatches(item, chat.ID, goal):
+			if goal.State != "active" || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision || goal.ExecutionAuthorizedRevision != goal.RequestedRevision {
+				s.blockWorkOwnedGoalLocked(item, "Muxterm Work goal is not active or its exact filed revision is uncertain; inspect the goal ledger before resuming.")
+				continue
+			}
+			if item.Dispatch.ContinuationCount >= maxWorkOwnedContinuations {
+				s.blockWorkOwnedGoalLocked(item, "Muxterm Work goal reached its continuation limit without completion; inspect progress before resuming.")
+				continue
+			}
+		default:
 			continue
 		}
 		copy := *item
 		dispatch := *item.Dispatch
-		dispatch.ContinuationEventID = chat.LastTurnEventID
+		dispatch.ContinuationEventID = event
 		dispatch.ContinuationState = "preparing"
 		dispatch.ContinuationCount++
 		copy.Dispatch = &dispatch
@@ -259,7 +330,7 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 			log.Printf("reserve Work goal continuation %s: %v", item.ID, err)
 			continue
 		}
-		reserved, chatID, eventID = copy, chat.ID, chat.LastTurnEventID
+		reserved, chatID, eventID = copy, chat.ID, event
 		break
 	}
 	h.mu.Unlock()
@@ -267,6 +338,12 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 		return
 	}
 	content := "Continue Work " + reserved.Reference + " from its current plan and next action. Read the Work record and any unread comments first. Keep its status, steps, progress, next action, and evidence current. Stop if Work is done, blocked, or human-paused. The exact filed condition remains:\n\n" + reserved.GoalCondition
+	if reserved.Dispatch.GoalMode == "native" {
+		content = "The native goal completed, but Work " + reserved.Reference + " is still active. Read its current record, comments, and prior results. File the concrete outcome and verification evidence in Work if the filed checks are satisfied. If evidence or an external decision is missing, record the exact blocker and leave Work incomplete. Do not repeat implementation, publication, or external actions. Keep the existing goal condition unchanged."
+	}
+	if strings.HasPrefix(eventID, "restart:") {
+		content = "Muxterm restarted during " + reserved.Reference + ". Read the Work record, its comments and this conversation before acting. Verify which actions already ran. If the filed checks passed, record the outcome and evidence in Work. Otherwise continue only the unfinished steps of the existing condition. Do not replay an external action whose outcome is uncertain. Record any external gate and leave Work incomplete."
+	}
 	payload, _ := json.Marshal(map[string]string{"clientRef": "work-continue:" + reserved.ID + ":" + eventID, "content": content})
 	sendCtx := context.WithValue(ctx, sdkWorkKickoffContextKey{}, reserved.ID)
 	sendCtx = context.WithValue(sendCtx, sdkWorkContinuationContextKey{}, eventID)
@@ -276,6 +353,7 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 	s.handleSDKControlSend(response, request)
 	var receipt struct {
 		Status string `json:"status"`
+		Detail string `json:"detail"`
 	}
 	accepted := response.Code == http.StatusAccepted && json.Unmarshal(response.Body.Bytes(), &receipt) == nil && receipt.Status == "accepted"
 	h.mu.Lock()
@@ -290,36 +368,47 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 	if !accepted && response.Code == http.StatusForbidden {
 		if chat := h.chats[chatID]; chat != nil {
 			goal, err := h.goals.update(*chat, nil)
-			paused = err == nil && goal.Mode == "muxterm-work" && goal.HumanPaused
+			paused = err == nil && goal.HumanPaused
 		}
 	}
+	observed := !accepted && h.workRestartObservedLocked(current, h.chats[chatID], eventID)
 	if accepted {
 		dispatch.ContinuationState = "accepted"
+	} else if observed {
+		dispatch.ContinuationState = "observed"
 	} else if paused {
 		// The pause rejected admission before an input receipt was reserved.
 		// Clearing this event fence lets an explicit human resume continue it.
 		dispatch.ContinuationEventID = ""
 		dispatch.ContinuationState = "paused"
+		if dispatch.ContinuationCount > 0 {
+			dispatch.ContinuationCount--
+		}
 	} else {
 		dispatch.ContinuationState = "uncertain"
 		if copy.Status == "active" {
 			copy.Status = "blocked"
-			copy.BlockedReason = "Work continuation delivery was not confirmed: " + response.Body.String()
+			copy.BlockedReason = "Work continuation delivery was not confirmed."
+			if receipt.Detail != "" {
+				copy.BlockedReason += " " + receipt.Detail
+			}
 			copy.NextAction = "Inspect the chat input receipt and transcript before resuming this Work goal."
 			copy.NeedsHuman = true
 		}
 	}
 	copy.Dispatch = &dispatch
 	now := time.Now().UTC()
-	summary := "Muxterm Work goal continued after a completed turn"
+	summary := "Work follow-up delivered to the existing worker"
 	if paused {
-		summary = "Muxterm Work goal continuation held by human pause"
+		summary = "Work follow-up held by human pause"
+	} else if observed {
+		summary = "Observed the original worker resume after restart"
 	} else if !accepted {
-		summary = "Muxterm Work goal continuation needs inspection"
+		summary = "Work follow-up needs inspection"
 	}
 	copy.Updates = append(slices.Clone(current.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "work-continuation:" + eventID,
 		At: now, Actor: sdkWorkActor{Kind: "external-tool"}, Summary: summary,
-		Text: "Muxterm-owned Work continuation for completed chat event " + eventID + "; delivery state: " + dispatch.ContinuationState + ".",
+		Text: "Work follow-up for completed chat event " + eventID + "; delivery state: " + dispatch.ContinuationState + ".",
 		Status: func() string {
 			if copy.Status == "blocked" {
 				return "blocked"

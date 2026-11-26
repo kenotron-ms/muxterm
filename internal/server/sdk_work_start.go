@@ -352,6 +352,9 @@ func workKickoffPrompt(item *sdkWorkItem) string {
 	if item.PlanProtocol != "" {
 		prompt += " Filed plan update protocol: " + item.PlanProtocol
 	}
+	if item.GraphID != "" {
+		prompt += "\n\nTo finish this filed graph item, record a concrete outcome and references to verification evidence with the done update. The final integration item must account for the filed release checks. If an external decision or credential is needed, record that specific gate and leave Work incomplete."
+	}
 	return prompt
 }
 

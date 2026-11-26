@@ -520,6 +520,7 @@ export class MuxChatCoordination extends LitElement {
     if (item.status === 'open' && (!item.goalCondition || !this.goalReady(item))) return item.goalCondition ? 'Goal needs attention' : 'Needs goal';
     if (item.readiness !== 'ready') return 'Draft';
     if (item.dispatch?.state === 'starting' || item.dispatch?.state === 'preparing') return 'Starting worker';
+    if (item.status === 'active' && item.graphIntegrationId && item.goalObservation?.state === 'complete') return 'Awaiting Work evidence';
     if (item.status === 'active' || item.ownerSessionId || item.dispatch) return 'In motion';
     return 'Ready to start';
   }
@@ -613,6 +614,26 @@ export class MuxChatCoordination extends LitElement {
       if (this.dispatchEvent(link)) void this.openDependency(id);
     }}>${reference}${target ? ` · ${target.title}` : ''}</a>`;
   }
+  private graphProgress(item: WorkItem) {
+    if (item.graphIntegrationId !== item.id || !item.graphLinks?.length) return nothing;
+    const children = item.graphLinks.flatMap(id => {
+      const child = this.work.find(row => row.id === id) || this.dependencyReferences[id];
+      return child ? [child] : [];
+    });
+    const completed = children.filter(child => child.status === 'done').length;
+    const frontier = children.filter(child => child.status !== 'done' && !child.waitingOn?.length);
+    return html`<section class="section"><h3>Epic progress</h3>
+      <p>${completed} of ${item.graphLinks.length} prerequisites complete</p>
+      ${frontier.length ? html`<ul class="work-links">${frontier.map(child => {
+        const recovering = ['starting', 'uncertain'].includes(child.dispatch?.state || '');
+        const state = child.status === 'blocked' && child.needsHuman ? 'Decision needed'
+          : recovering ? 'Recovering worker'
+          : this.status(child);
+        return html`<li>${this.workLink(child.id)}<span>${state}</span>
+          ${child.blockedReason ? html`<p>${child.blockedReason}</p>` : nothing}</li>`;
+      })}</ul>` : nothing}
+    </section>`;
+  }
   private dependencies(item: WorkItem) {
     const related = (item.graphLinks || []).filter(id => !item.dependsOn?.includes(id) && id !== item.graphIntegrationId);
     const integration = item.graphIntegrationId && item.graphIntegrationId !== item.id ? item.graphIntegrationId : '';
@@ -691,6 +712,7 @@ export class MuxChatCoordination extends LitElement {
       <div class=${`status ${stateClass}`}>${icon(this.statusIcon(item))}${state}</div>
       ${item.reference ? html`<span class="work-reference work-reference-detail">${item.reference}</span>${this.remoteHost ? html`<span class="work-reference-host">on ${this.remoteHost}</span>` : nothing}` : nothing}
       <h2>${item.title}</h2>
+      ${this.graphProgress(item)}
       ${this.navigationNotice ? html`<p role="status">${this.navigationNotice}</p>` : nothing}
       ${inMotion && move ? html`<div class=${`next-brief ${item.status === 'blocked' ? 'blocked' : ''}`}><strong>${item.status === 'blocked' ? 'What is needed' : 'Next move'}</strong><p>${movePreview}</p>${unreadCount ? html`<mux-ui-button variant="quiet" size="small" @click=${() => this.selectTab('activity')}>Read ${unreadCount} unread ${unreadCount === 1 ? 'comment' : 'comments'}</mux-ui-button>` : nothing}</div>` : nothing}
       <div class="detail-tabs" role="tablist" aria-label="Work item details">

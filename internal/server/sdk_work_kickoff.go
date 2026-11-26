@@ -81,7 +81,11 @@ func (h *sdkChatHost) checkWorkKickoffLocked(workID, chatID, ref string, admissi
 // A missing receipt proves the control send did not reach the sidecar.
 // Once its receipt exists, only positive evidence can resolve the ambiguity.
 func (h *sdkChatHost) workKickoffReceiptLocked(item *sdkWorkItem) (exists, accepted bool, err error) {
-	ref, chatID := workKickoffRef(item), item.Dispatch.SessionID
+	return h.workInputReceiptLocked(item, workKickoffRef(item))
+}
+
+func (h *sdkChatHost) workInputReceiptLocked(item *sdkWorkItem, ref string) (exists, accepted bool, err error) {
+	chatID := item.Dispatch.SessionID
 	data, err := os.ReadFile(h.controlPath(chatID, ref))
 	if os.IsNotExist(err) {
 		return false, false, nil

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -87,17 +88,23 @@ func (s *Server) reconcileWork(ctx context.Context) {
 	s.reconcileWorkKickoffs(ctx)
 	s.reconcileWorkFailures()
 	s.reconcileWorkOwnedGoals(ctx)
+	attempted := make(map[string]bool)
 	for ctx.Err() == nil {
 		h := s.sdkChats
 		h.mu.Lock()
 		ready := make([]*sdkWorkItem, 0)
 		for _, item := range h.workItems {
-			if h.workEligibleLocked(item, false) {
+			if !attempted[item.ID] && h.workEligibleLocked(item, false) {
 				ready = append(ready, item)
 			}
 		}
 		sort.Slice(ready, func(i, j int) bool {
 			if ready[i].CreatedAt.Equal(ready[j].CreatedAt) {
+				a, _ := workReferenceNumber(ready[i].Reference)
+				b, _ := workReferenceNumber(ready[j].Reference)
+				if a != b {
+					return a < b
+				}
 				return ready[i].ID < ready[j].ID
 			}
 			return ready[i].CreatedAt.Before(ready[j].CreatedAt)
@@ -106,16 +113,21 @@ func (s *Server) reconcileWork(ctx context.Context) {
 			h.mu.Unlock()
 			return
 		}
-		id := ready[0].ID
+		item := ready[0]
+		id := item.ID
+		ref := "scheduler:" + id
+		if item.GraphID != "" {
+			ref += ":" + strconv.Itoa(item.Revision)
+		}
+		attempted[id] = true
 		h.mu.Unlock()
-		body, _ := json.Marshal(map[string]string{"clientRef": "scheduler:" + id})
+		body, _ := json.Marshal(map[string]string{"clientRef": ref})
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sdk-work/"+id+"/start", bytes.NewReader(body))
 		req.SetPathValue("id", id)
 		response := httptest.NewRecorder()
 		s.handleSDKWorkStart(response, req)
 		if response.Code != 200 {
 			log.Printf("work scheduler: start %s: %d %s", id, response.Code, response.Body.String())
-			return
 		}
 	}
 }
@@ -148,6 +160,15 @@ func (s *Server) reconcileWorkFailures() {
 			goal, err := h.goals.update(*worker, nil)
 			if err == nil && goal.Mode == "muxterm-work" && (goal.HumanPaused || goal.State == "active" || goal.State == "paused") {
 				continue
+			}
+		}
+		if worker != nil && worker.State == "uncertain" && item.GraphID != "" && item.OwnerSessionID == workerID {
+			goal, err := h.goals.update(*worker, nil)
+			if err == nil && workGoalMatches(item, workerID, goal) {
+				event := h.workRestartEventLocked(item, worker, goal)
+				if goal.HumanPaused || worker.UpdateRecoveryUnix != 0 || (event != "" && (item.Dispatch.ContinuationEventID != event || item.Dispatch.ContinuationState == "preparing")) {
+					continue
+				}
 			}
 		}
 		if workerID == "" || (worker != nil && worker.State != "failed" && worker.State != "uncertain" && !(item.OwnerSessionID == "" && worker.State == "ready" && item.Dispatch != nil && time.Since(item.Dispatch.UpdatedAt) >= 30*time.Second)) {
