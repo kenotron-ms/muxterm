@@ -22,7 +22,15 @@ func (s *Server) reconcileNativeWorkKickoff(ctx context.Context, id string) {
 	dispatch := *item.Dispatch
 	worker := h.chats[dispatch.SessionID]
 	if worker == nil || worker.Archived {
-		result, err := h.finishWorkDispatchLocked(id, dispatch.ClientRef, "failed", "The selected chat is missing or archived.")
+		if item.Status == "blocked" {
+			h.mu.Unlock()
+			return
+		}
+		state, detail := "failed", "The selected chat is missing or archived."
+		if dispatch.KickoffAttempts > 0 {
+			state, detail = "uncertain", "Native goal activation could not be confirmed. The selected chat is missing or archived."
+		}
+		result, err := h.finishWorkDispatchLocked(id, dispatch.ClientRef, state, detail)
 		h.mu.Unlock()
 		if err == nil {
 			h.notifyWorkKickoffFailure(result)
@@ -92,6 +100,12 @@ func (s *Server) reconcileNativeWorkKickoff(ctx context.Context, id string) {
 	dispatch.KickoffAttempts++
 	dispatch.UpdatedAt = time.Now().UTC()
 	copy.Dispatch = &dispatch
+	if copy.OwnerSessionID == "" {
+		// Older servers persisted this reservation before binding an owner.
+		assignWorkWorker(&copy, &dispatch)
+		copy.Revision++
+		copy.UpdatedAt = dispatch.UpdatedAt
+	}
 	if err := h.saveWorkLocked(&copy); err != nil {
 		h.mu.Unlock()
 		log.Printf("reserve native Work kickoff %s: %v", id, err)

@@ -43,6 +43,19 @@ func (h *sdkChatHost) eligibleWorkChatLocked(chat *sdkChat, item *sdkWorkItem, p
 	return true
 }
 
+func assignWorkWorker(item *sdkWorkItem, dispatch *sdkWorkDispatch) {
+	dispatch.AssignmentRevision = item.Revision + 1
+	dispatch.WorkGoalRevision = item.GoalRevision
+	item.OwnerSessionID = dispatch.SessionID
+	item.Status = "active"
+	owner := dispatch.SessionID
+	item.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
+		ID: sdkID(), ClientRef: "dispatch-assigned:" + dispatch.ClientRef, At: dispatch.UpdatedAt,
+		Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Scheduler assigned worker",
+		LinkedSessionID: owner, OwnerSessionID: &owner, Status: "active",
+	})
+}
+
 func (s *Server) finishWorkDispatch(id, ref, state, detail string) (sdkWorkItem, error) {
 	h := s.sdkChats
 	h.mu.Lock()
@@ -79,15 +92,14 @@ func (h *sdkChatHost) finishWorkDispatchLocked(id, ref, state, detail string) (s
 			if err != nil || goal.HumanPaused || dispatch.GoalMode == "native" && goal.RequestedRevision != 0 {
 				return h.finishWorkDispatchLocked(id, ref, "failed", "The selected chat's goal changed or was paused before assignment.")
 			}
-			dispatch.AssignmentRevision = copy.Revision + 1
-			dispatch.WorkGoalRevision = copy.GoalRevision
-			copy.OwnerSessionID = dispatch.SessionID
-			copy.Status = "active"
-			copy.Updates = append(slices.Clone(copy.Updates), sdkWorkUpdate{
-				ID: sdkID(), ClientRef: "dispatch-assigned:" + ref, At: dispatch.UpdatedAt,
-				Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Scheduler assigned worker",
-				LinkedSessionID: dispatch.SessionID, OwnerSessionID: &copy.OwnerSessionID, Status: "active",
-			})
+			currentConfiguration := sdkWorkConfiguration{
+				Harness: worker.Harness, Provider: worker.Provider, Bundle: worker.Bundle,
+				Model: worker.Model, Effort: worker.Effort,
+			}
+			if dispatch.Configuration == nil || currentConfiguration != *dispatch.Configuration {
+				return h.finishWorkDispatchLocked(id, ref, "failed", "The selected chat's configuration changed before assignment.")
+			}
+			assignWorkWorker(&copy, &dispatch)
 		}
 		if state == "failed" || state == "uncertain" {
 			copy.Status = "blocked"

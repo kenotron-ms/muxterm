@@ -252,6 +252,12 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 	dispatch.KickoffAttempts++
 	dispatch.UpdatedAt = time.Now().UTC()
 	copy.Dispatch = &dispatch
+	if copy.OwnerSessionID == "" {
+		// Older servers persisted this reservation before binding an owner.
+		assignWorkWorker(&copy, &dispatch)
+		copy.Revision++
+		copy.UpdatedAt = dispatch.UpdatedAt
+	}
 	// An attempt is internal progress. Keep the revision stable for a worker
 	// that races its first Work update against receipt reconciliation.
 	if err := h.saveWorkLocked(&copy); err != nil {
