@@ -61,14 +61,8 @@ func (h *sdkChatHost) checkWorkKickoffLocked(workID, chatID, ref string, admissi
 		item.Dispatch.ClientRef != admission.ref || item.Dispatch.KickoffAttempts != admission.attempt || workKickoffRef(item) != ref {
 		return false
 	}
-	if admission.attempt > 1 {
-		started, err := h.workKickoffTurnObservedLocked(item)
-		if started || err != nil {
-			return false
-		}
-	}
 	goal, err := h.goals.update(*h.chats[chatID], nil)
-	if err != nil || goal.HumanPaused || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision || (item.Dispatch.KickoffGoalHeld && goal.State != "paused") ||
+	if err != nil || goal.HumanPaused || goal.RequestedRevision == 0 || goal.AppliedRevision != goal.RequestedRevision ||
 		goal.ExecutionAuthorizedRevision != goal.RequestedRevision || len(goal.Revisions) == 0 ||
 		goal.Revisions[len(goal.Revisions)-1].Condition != item.GoalCondition {
 		return false
@@ -105,60 +99,30 @@ func (h *sdkChatHost) workKickoffReceiptLocked(item *sdkWorkItem) (exists, accep
 }
 
 func (h *sdkChatHost) workKickoffEventLocked(chatID, inputID string) bool {
-	found, _ := h.findWorkKickoffEventLocked(chatID, func(event sdkEvent) bool {
-		switch event.Type {
-		case "input.accepted", "input.delivered":
-			return event.InputID == inputID
-		case "turn.completed", "turn.cancelled":
-			return slices.Contains(event.InputIDs, inputID)
-		}
-		return false
-	})
-	return found
-}
-
-// Some native goal controls launch a turn themselves. Even without a
-// kickoff input receipt, an observed turn makes another input unsafe.
-func (h *sdkChatHost) workKickoffTurnObservedLocked(item *sdkWorkItem) (bool, error) {
-	dispatch := item.Dispatch
-	if dispatch.GoalMode != "native" {
-		return false, nil
-	}
-	if worker := h.chats[dispatch.SessionID]; worker != nil && worker.State == "working" {
-		return true, nil
-	}
-	return h.findWorkKickoffEventLocked(dispatch.SessionID, func(event sdkEvent) bool {
-		if event.At.Before(dispatch.CreatedAt) {
-			return false
-		}
-		switch event.Type {
-		case "turn.started", "turn.completed", "turn.cancelled":
-			return true
-		case "input.accepted":
-			return event.Source == "goal-control"
-		}
-		return false
-	})
-}
-
-func (h *sdkChatHost) findWorkKickoffEventLocked(chatID string, match func(sdkEvent) bool) (bool, error) {
 	f, err := os.Open(filepath.Join(h.dir, chatID+".ndjson"))
-	if os.IsNotExist(err) {
-		return false, nil
-	}
 	if err != nil {
-		return false, err
+		return false
 	}
 	defer f.Close()
 	scan := bufio.NewScanner(f)
 	scan.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scan.Scan() {
 		var event sdkEvent
-		if json.Unmarshal(scan.Bytes(), &event) == nil && match(event) {
-			return true, nil
+		if json.Unmarshal(scan.Bytes(), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "input.accepted", "input.delivered":
+			if event.InputID == inputID {
+				return true
+			}
+		case "turn.completed", "turn.cancelled":
+			if slices.Contains(event.InputIDs, inputID) {
+				return true
+			}
 		}
 	}
-	return false, scan.Err()
+	return false
 }
 
 // Recognize blocks written by the dispatcher itself. A later status decision
@@ -183,13 +147,9 @@ func awaitingLateWorkKickoff(item *sdkWorkItem) bool {
 
 func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 	h := s.sdkChats
-	var pending, held []string
+	var pending []string
 	h.mu.Lock()
 	for id, item := range h.workItems {
-		if item.Dispatch != nil && item.Dispatch.KickoffGoalHeld && (item.Dispatch.State == "sent" || item.Dispatch.State == "claimed") &&
-			(item.Status == "open" || item.Status == "active") {
-			held = append(held, id)
-		}
 		if item.Dispatch != nil && (item.Dispatch.State == "starting" && item.Status == "open" || awaitingLateWorkKickoff(item)) {
 			pending = append(pending, id)
 		}
@@ -200,13 +160,6 @@ func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 			return
 		}
 		s.reconcileWorkKickoff(ctx, id)
-		s.releaseWorkKickoffGoal(ctx, id)
-	}
-	for _, id := range held {
-		if ctx.Err() != nil {
-			return
-		}
-		s.releaseWorkKickoffGoal(ctx, id)
 	}
 }
 
@@ -214,6 +167,11 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 	h := s.sdkChats
 	h.mu.Lock()
 	item := h.workItems[id]
+	if item != nil && item.Dispatch != nil && item.Dispatch.GoalMode == "native" {
+		h.mu.Unlock()
+		s.reconcileNativeWorkKickoff(ctx, id)
+		return
+	}
 	if item != nil && awaitingLateWorkKickoff(item) {
 		_, accepted, _ := h.workKickoffReceiptLocked(item)
 		worker := h.chats[item.Dispatch.SessionID]
@@ -245,18 +203,11 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 	}
 	dispatch := *item.Dispatch
 	exists, accepted, receiptErr := h.workKickoffReceiptLocked(item)
-	started := false
-	if !exists && dispatch.KickoffAttempts > 0 {
-		started, receiptErr = h.workKickoffTurnObservedLocked(item)
-		exists = receiptErr != nil
-	}
 	elapsed := time.Since(dispatch.UpdatedAt)
 	state, detail := "", ""
 	switch {
 	case accepted:
 		state = "sent"
-	case started:
-		state, detail = "sent", "An existing native turn is running or recorded for the selected chat."
 	case exists && elapsed >= 4*time.Minute:
 		state, detail = "uncertain", "Kickoff delivery could not be confirmed. Open the selected chat and inspect its transcript before resolving the dispatch."
 		if receiptErr != nil {

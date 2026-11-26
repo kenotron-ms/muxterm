@@ -132,10 +132,8 @@ func (s *Server) reconcileWorkFailures() {
 		}
 		worker := h.chats[workerID]
 		if item.OwnerSessionID == "" && item.Dispatch != nil && item.Dispatch.State == "sent" &&
-			item.Dispatch.KickoffGoalHeld && worker != nil && !worker.Archived &&
+			item.Dispatch.GoalMode == "native" && worker != nil && !worker.Archived &&
 			worker.State == "uncertain" && time.Since(item.Dispatch.UpdatedAt) < 30*time.Second {
-			// A proven kickoff gets time to reattach its original native
-			// thread and for that worker's first claim after a restart.
 			continue
 		}
 		if item.OwnerSessionID == "" && item.Dispatch != nil && item.Dispatch.State == "sent" &&

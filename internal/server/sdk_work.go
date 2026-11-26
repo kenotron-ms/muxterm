@@ -143,7 +143,6 @@ type sdkWorkDispatch struct {
 	Configuration       *sdkWorkConfiguration `json:"configuration,omitempty"`
 	ChoiceSource        string                `json:"choiceSource,omitempty"`
 	GoalMode            string                `json:"goalMode,omitempty"`
-	KickoffGoalHeld     bool                  `json:"kickoffGoalHeld,omitempty"`
 	KickoffAttempts     int                   `json:"kickoffAttempts,omitempty"`
 	ContinuationEventID string                `json:"continuationEventId,omitempty"`
 	ContinuationState   string                `json:"continuationState,omitempty"`
@@ -797,7 +796,31 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSDKWorkItem(w http.ResponseWriter, r *http.Request) {
 	h := s.sdkChats
 	h.mu.Lock()
-	item, resolveErr := h.resolveWorkReferenceLocked(r.PathValue("id"))
+	ref := r.PathValue("id")
+	var item *sdkWorkItem
+	var resolveErr error
+	if ref == "assigned" {
+		actor := h.requestWorkActorLocked(r)
+		for _, candidate := range h.workItems {
+			if actor.Kind != "chat" || (candidate.Status != "open" && candidate.Status != "active") {
+				continue
+			}
+			owner := candidate.OwnerSessionID
+			if owner == "" && candidate.Dispatch != nil && (candidate.Dispatch.State == "starting" || candidate.Dispatch.State == "sent") {
+				owner = candidate.Dispatch.SessionID
+			}
+			if owner != actor.SessionID {
+				continue
+			}
+			if item != nil {
+				resolveErr = errAmbiguousWorkReference
+				break
+			}
+			item = candidate
+		}
+	} else {
+		item, resolveErr = h.resolveWorkReferenceLocked(ref)
+	}
 	var copy sdkWorkItem
 	if item != nil {
 		copy = *item

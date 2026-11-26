@@ -248,7 +248,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 	if config.Harness == "opencode" {
 		goalMode = "muxterm-work"
 	}
-	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, ContextWorkID: contextWorkID, Configuration: &configuration, ChoiceSource: choiceSource, GoalMode: goalMode, KickoffGoalHeld: config.Harness == "codex", CreatedAt: now, UpdatedAt: now}
+	copy.Dispatch = &sdkWorkDispatch{ClientRef: req.ClientRef, SessionID: workerID, State: "preparing", SelectionReason: reason, ContextWorkID: contextWorkID, Configuration: &configuration, ChoiceSource: choiceSource, GoalMode: goalMode, CreatedAt: now, UpdatedAt: now}
 	setting := func(value string) string {
 		if value == "" {
 			return "none"
@@ -310,7 +310,7 @@ func (s *Server) handleSDKWorkStart(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if state == "sent" {
+	if state == "sent" && goalMode == "muxterm-work" {
 		goalState, err := s.installWorkGoal(workerID, &copy)
 		if err != nil {
 			state, detail = goalState, err.Error()
