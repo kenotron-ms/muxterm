@@ -1,5 +1,5 @@
 package server
 
-func sdkChatInput(id, content string) string {
-	return "Muxterm chat ID: " + id + ". If goal coordination is needed for your assignment, read get_chat_goal using session_id=self and propose a condition through report_goal_evidence; proposals are inert. Do not add goal-management work to an unrelated assignment. Only a human can approve and start a proposal or revise the approved condition. Goal controls require the ledger controlVersion and cannot release a human pause.\n\n" + content
+func sdkGoalifyInput(id, content string) string {
+	return "Muxterm chat ID: " + id + ". If you need to inspect the current goal, use get_chat_goal with session_id=self. Return suggested wording in your reply for the human to review. Only a human can approve and start a proposal or revise the approved condition. Goal controls require the ledger controlVersion and cannot release a human pause.\n\n" + content
 }

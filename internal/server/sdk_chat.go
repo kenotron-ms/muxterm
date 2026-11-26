@@ -2435,7 +2435,7 @@ func (s *Server) handleSDKChats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	openingID := sdkID()
-	openingContent := sdkChatInput(c.ID, req.Prompt)
+	openingContent := req.Prompt
 	if sideContext != "" {
 		openingContent = sideContext + "\n\nSide question: " + req.Prompt
 	}
@@ -2861,8 +2861,8 @@ func (s *Server) handleSDKChat(w http.ResponseWriter, r *http.Request) {
 		if (req.Kind == "user" || req.Kind == "steer") && s.voiceProvider() != "" {
 			content = sdkTaskInputWithVoiceContext(content, h.recentVoiceContext(id))
 		}
-		if req.Kind == "user" || req.Kind == "steer" {
-			content = sdkChatInput(id, content)
+		if req.Source == "goalify" {
+			content = sdkGoalifyInput(id, content)
 		}
 		var boundaryTokens []sdkWorkBoundaryToken
 		if req.Kind == "user" {
