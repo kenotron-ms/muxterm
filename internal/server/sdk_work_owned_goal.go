@@ -83,7 +83,7 @@ func (s *Server) resumeUnclaimedWorkKickoff(chatID string, controlVersion int) {
 // A reused chat can retain historical Work links. Only the selected owner's
 // current filed condition can participate in the lifecycle.
 func workGoalMatches(item *sdkWorkItem, chatID string, document goalDocument) bool {
-	if item.OwnerSessionID != chatID || item.GoalFiledRevision == 0 || item.GoalFiledRevision != item.GoalRevision {
+	if item.OwnerSessionID != chatID || item.GoalRevision < 1 || (item.GoalFiledRevision != item.GoalRevision && item.GoalApproved != item.GoalRevision) {
 		return false
 	}
 	for _, revision := range document.Revisions {

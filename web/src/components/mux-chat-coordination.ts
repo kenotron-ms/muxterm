@@ -380,9 +380,8 @@ export class MuxChatCoordination extends LitElement {
           this.replacementDraft = { workId:item.id, revision:item.revision, controlVersion:goal.document.controlVersion, condition:'', clientRef:crypto.randomUUID() };
         }}>Replace goal</mux-ui-button>` : nothing}
       ${draft ? html`<form class="section" @submit=${(event: SubmitEvent) => { event.preventDefault(); void this.approveGoalReplacement(); }}>
-        <label for="work-replacement-condition">Replacement goal condition</label>
-        <textarea id="work-replacement-condition" rows="8" maxlength="4000" required .value=${draft.condition}
-          @input=${(event: InputEvent) => { this.replacementDraft = { ...draft, condition:(event.target as HTMLTextAreaElement).value }; }}></textarea>
+        <mux-ui-text-area label="Replacement goal condition" .rows=${8} .maxLength=${4000} required .value=${draft.condition}
+          @input=${(event: Event) => { this.replacementDraft = { ...draft, condition:(event.target as MuxUITextArea).value }; }}></mux-ui-text-area>
         <p>The owning chat and Work history are retained. The new condition stays paused until you resume it.</p>
         <mux-ui-button variant="secondary" ?disabled=${this.goalSending || !draft.condition.trim()} @click=${() => void this.approveGoalReplacement()}>Approve replacement</mux-ui-button>
         <mux-ui-button variant="quiet" ?disabled=${this.goalSending} @click=${() => { this.replacementDraft = undefined; }}>Cancel</mux-ui-button>
