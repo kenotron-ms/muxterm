@@ -2715,12 +2715,20 @@ export class MuxSDKChat extends LitElement {
     else this.stepExpanded.add(key);
     this.requestUpdate();
   }
+  private latestGoalControl() {
+    return this.goalDocument?.receipts.findLast(receipt =>
+      ['pause', 'resume', 'set', 'approve', 'start', 'clear'].includes(receipt.action));
+  }
   private goalStatus() {
     const condition = this.currentGoalText();
     if (!condition) return nothing;
     const record = this.goalDocument;
-    const label = record?.humanPaused ? 'Goal paused'
-      : record?.receipts.some(receipt => receipt.status === 'dispatching') ? 'Applying goal change…'
+    const control = this.latestGoalControl();
+    const uncertain = control?.status === 'uncertain';
+    const label = control?.status === 'dispatching'
+      ? control.action === 'pause' ? 'Pausing goal…' : control.action === 'resume' ? 'Resuming goal…' : 'Applying goal change…'
+      : uncertain ? 'Goal delivery uncertain'
+      : record?.humanPaused ? 'Goal paused'
       : record && record.requestedRevision > record.appliedRevision ? 'Goal change requested'
       : record?.state === 'active' || record?.state === 'continuing' ? 'Pursuing goal'
       : record?.state === 'complete' || record?.state === 'completed' || record?.state === 'achieved' ? 'Goal achieved'
@@ -2731,7 +2739,7 @@ export class MuxSDKChat extends LitElement {
       : record?.state === 'uncertain' || record?.state === 'error' ? 'Goal needs review'
       : record?.state === 'ended' ? 'Goal ended'
       : record?.state === 'paused' ? 'Goal paused' : 'Goal set';
-    const tone = record?.humanPaused || ['paused','blocked','ended','stalled','cancelled','usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'warning'
+    const tone = uncertain ? 'danger' : record?.humanPaused || ['paused','blocked','ended','stalled','cancelled','usage_limited','budget_limited','cap_hit'].includes(record?.state || '') ? 'warning'
       : ['complete','completed','achieved'].includes(record?.state || '') ? 'success'
       : ['uncertain','error'].includes(record?.state || '') ? 'danger' : 'default';
     const goalState = record?.state || '';
@@ -2792,6 +2800,11 @@ export class MuxSDKChat extends LitElement {
         if (this.currentGoalText(current)) this.openGoalTab();
         else this.commandNotice = 'No goal is set for this chat. Type /goal followed by a condition.';
       } else {
+        const previousCondition = this.currentGoalText(current);
+        if (command.action === 'set' && previousCondition && previousCondition !== command.condition) {
+          const confirmed = window.confirm(`Replace the current chat goal?\n\nCurrent condition\n${previousCondition}\n\nNew condition\n${command.condition}`);
+          if (!confirmed) return;
+        }
         const response = await fetch(this.chatPath(`/api/sdk-chats/${encodeURIComponent(sessionId)}/goal`), {
           method:'PATCH', headers:{'Content-Type':'application/json'},
           body:JSON.stringify({ action:command.action, objective:command.condition || '', clientRef:crypto.randomUUID(), expectedVersion:current.controlVersion }),
@@ -3128,10 +3141,13 @@ export class MuxSDKChat extends LitElement {
       ${expanded ? html`<div class="lane-report-detail input-message-detail" id=${detailId}>${this.markdown(block, block.key, true)}</div>` : nothing}</article>`;
   }
   private utilityContent() {
+    const control = this.latestGoalControl();
+    const controlFeedback = control?.status === 'uncertain'
+      ? `Goal delivery uncertain. ${control.detail || 'Review the current goal before retrying.'}` : '';
     return html`<mux-sdk-utility .sessionId=${this.sessionId} .projectId=${this.chat?.workspaceId || ''} .voiceEntries=${this.voiceEntries} .voiceState=${this.voiceState} .voiceStartedAt=${this.voiceStartedAt} .voiceAvailable=${this.voiceAvailable} .voiceCanStart=${!this.voiceStartPending && !this.settingsPending && !this.dictationActive && !this.chat?.branchPending && (!sdkVoiceCall.active || sdkVoiceCall.active.chatId === this.sessionId)} .voiceError=${this.voiceError} @voice-toggle=${() => void this.toggleVoice()} .remoteHost=${this.chat?.remoteHost || ''} .projectPath=${this.chat?.projectPath || ''} @work-reference-open=${(event: CustomEvent<{id:string; host:string; trigger:HTMLElement}>) => {
       event.preventDefault();
       this.openWorkItem(event.detail.id, event.detail.trigger, undefined, event.detail.host);
-    }} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '')} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
+    }} .goalText=${this.currentGoalText()} .goalState=${this.goalDocument?.state || ''} .goalHumanPaused=${!!this.goalDocument?.humanPaused} .goalControlPending=${this.commandPending || !!this.goalDocument?.receipts.some(receipt => receipt.status === 'dispatching')} .goalClearSupported=${this.chat?.harness !== 'copilot'} .goalRefinePending=${this.goalifyPending} .goalRefineDisabled=${this.busy} .goalFeedback=${this.goalifyError || this.goalNotice || (this.commandFailed ? this.commandNotice : '') || controlFeedback} .goalFeedbackError=${!!this.goalifyError || !!this.goalNotice || this.commandFailed || !!controlFeedback} .focused=${this.previewFocused} .touched=${this.touchedFiles()} @goal-refine=${() => void this.refineGoal(this.currentGoalText())} @goal-control=${(event:CustomEvent<{action:'pause'|'resume'|'clear'}>) => void this.executeChatCommand({name:'goal',action:event.detail.action})} @sdk-file-reference=${this.stageFileReference} @sdk-page-prompt=${this.stagePagePrompt} @sdk-file-focus=${() => this.setPaneMode(this.previewFocused ? 'split' : 'preview')} @close=${() => this.setPaneMode('chat')}></mux-sdk-utility>`;
   }
   override render() {
     const agents = this.agents();

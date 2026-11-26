@@ -18,7 +18,8 @@ type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; ses
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; choiceSource?: string; goalMode?: 'native' | 'muxterm-work'; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped' };
 type WorkUpdate = { id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; harness?: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
-type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
+type WorkChatGoal = { requestedRevision:number; appliedRevision:number; controlVersion:number; state:string; humanPaused:boolean; receipts:{id:string; action:string; status:string; detail?:string}[] };
+type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalReplacement?: { clientRef:string; condition:string; workRevision:number; controlVersion:number }; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 type DetailTab = 'description' | 'people' | 'plan' | 'activity';
 const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownership' | 'plan' | 'clock' }[] = [
@@ -68,6 +69,11 @@ export class MuxChatCoordination extends LitElement {
   @property() remoteHost = '';
   @state() private work: WorkItem[] = [];
   @state() private detail?: WorkItem;
+  @state() private chatGoal?: { path:string; document:WorkChatGoal };
+  @state() private unmatchedGoalPath = '';
+  @state() private goalSending = false;
+  @state() private goalError = '';
+  @state() private replacementDraft?: { workId:string; revision:number; controlVersion:number; condition:string; clientRef:string };
   @state() private dependencyReferences: Record<string,WorkItem> = {};
   private loadingDependencies = new Set<string>();
   @state() private control?: WorkControl;
@@ -278,6 +284,112 @@ export class MuxChatCoordination extends LitElement {
     if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
     return await response.json() as T;
   }
+  private workChatGoalPath(item?: WorkItem) {
+    if (!item?.ownerSessionId || !['active', 'blocked'].includes(item.status)) return '';
+    return `/api/sdk-chats/${encodeURIComponent(item.ownerSessionId)}/goal?workId=${encodeURIComponent(item.id)}`;
+  }
+  private async refreshWorkChatGoal() {
+    const path = this.workChatGoalPath(this.detail);
+    if (!path) {
+      this.chatGoal = undefined;
+      return;
+    }
+    try {
+      const response = await fetch(this.path(path), { cache: 'no-store' });
+      const document = response.ok ? await response.json() as WorkChatGoal : undefined;
+      if (!this.goalSending && path === this.workChatGoalPath(this.detail)) {
+        this.chatGoal = document ? { path, document } : undefined;
+        this.unmatchedGoalPath = response.status === 409 ? path : '';
+      }
+    } catch {
+      if (!this.goalSending && path === this.workChatGoalPath(this.detail)) this.chatGoal = undefined;
+    }
+  }
+  private async controlWorkChatGoal(action: 'pause' | 'resume') {
+    const goal = this.chatGoal;
+    if (!goal || this.goalSending || goal.path !== this.workChatGoalPath(this.detail)) return;
+    this.goalSending = true;
+    this.goalError = '';
+    try {
+      const document = await this.request<WorkChatGoal>(goal.path, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, clientRef: crypto.randomUUID(), expectedVersion: goal.document.controlVersion, workRevision: this.detail?.revision }),
+      });
+      if (goal.path === this.workChatGoalPath(this.detail)) this.chatGoal = { path: goal.path, document };
+    } catch (error) {
+      if (goal.path === this.workChatGoalPath(this.detail)) this.goalError = String(error);
+    } finally {
+      this.goalSending = false;
+      void this.refreshWorkChatGoal();
+    }
+  }
+  private async approveGoalReplacement() {
+    const draft = this.replacementDraft;
+    if (!draft || this.detail?.id !== draft.workId || this.goalSending) return;
+    this.goalSending = true;
+    this.goalError = '';
+    try {
+      const item = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(draft.workId)}/goal-replace`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientRef: draft.clientRef, condition: draft.condition, workRevision: draft.revision, controlVersion: draft.controlVersion }),
+      });
+      if (this.detail?.id === draft.workId) this.detail = item;
+      this.replacementDraft = undefined;
+    } catch (error) {
+      if (this.detail?.id === draft.workId) this.goalError = String(error);
+    } finally {
+      this.goalSending = false;
+      void this.refreshWorkChatGoal();
+    }
+  }
+  private renderWorkChatGoal(item: WorkItem) {
+    const goal = this.chatGoal;
+    const path = this.workChatGoalPath(item);
+    if (!path) return nothing;
+    if (item.goalReplacement) {
+      const intent = item.goalReplacement;
+      return html`<section class="section">
+        <h3>Approved replacement</h3>
+        <p>${intent.condition}</p>
+        <p>The goal remains paused. Finish filing the approved condition before resuming.</p>
+        <mux-ui-button variant="secondary" ?disabled=${this.goalSending} @click=${() => {
+          this.replacementDraft = { workId:item.id, revision:intent.workRevision, controlVersion:intent.controlVersion, condition:intent.condition, clientRef:intent.clientRef };
+          void this.approveGoalReplacement();
+        }}>Finish replacement</mux-ui-button>
+        ${this.goalError ? html`<p role="status">${this.goalError}</p>` : nothing}
+      </section>`;
+    }
+    if (!goal || goal.path !== path) {
+      return this.unmatchedGoalPath === path ? html`<p role="status">The owning chat has no current goal matching this Work condition.</p>` : nothing;
+    }
+    const latest = goal.document.receipts.findLast(receipt => ['pause', 'resume', 'set', 'approve', 'start', 'clear'].includes(receipt.action));
+    const pending = goal.document.receipts.some(receipt => receipt.status === 'dispatching');
+    const paused = goal.document.humanPaused;
+    const uncertain = latest?.status === 'uncertain';
+    const detail = this.goalError || (uncertain ? latest?.detail : '');
+    const applied = goal.document.appliedRevision === goal.document.requestedRevision;
+    const draft = this.replacementDraft?.workId === item.id ? this.replacementDraft : undefined;
+    return html`<section class="section" aria-labelledby="work-chat-goal">
+      <h3 id="work-chat-goal">Chat goal</h3>
+      <p role="status">${pending ? latest?.action === 'pause' ? 'Pausing…' : latest?.action === 'resume' ? 'Resuming…' : 'Awaiting confirmation' : uncertain ? 'Delivery uncertain' : paused ? 'Paused by you' : goal.document.state}</p>
+      <mux-ui-button variant="secondary" size="small" ?disabled=${pending || this.goalSending || !!draft || (paused && !applied)}
+        @click=${() => void this.controlWorkChatGoal(paused ? 'resume' : 'pause')}>${paused ? 'Resume goal' : 'Pause goal'}</mux-ui-button>
+      ${paused && applied && !pending && !uncertain && item.dispatch && !draft ? html`
+        <mux-ui-button variant="quiet" size="small" @click=${() => {
+          this.goalError = '';
+          this.replacementDraft = { workId:item.id, revision:item.revision, controlVersion:goal.document.controlVersion, condition:'', clientRef:crypto.randomUUID() };
+        }}>Replace goal</mux-ui-button>` : nothing}
+      ${draft ? html`<form class="section" @submit=${(event: SubmitEvent) => { event.preventDefault(); void this.approveGoalReplacement(); }}>
+        <mux-ui-text-area label="Replacement goal condition" .rows=${8} .maxLength=${4000} required .value=${draft.condition}
+          @input=${(event: Event) => { this.replacementDraft = { ...draft, condition:(event.target as MuxUITextArea).value }; }}></mux-ui-text-area>
+        <p>The owning chat and Work history are retained. The new condition stays paused until you resume it.</p>
+        <mux-ui-button variant="secondary" ?disabled=${this.goalSending || !draft.condition.trim()} @click=${() => void this.approveGoalReplacement()}>Approve replacement</mux-ui-button>
+        <mux-ui-button variant="quiet" ?disabled=${this.goalSending} @click=${() => { this.replacementDraft = undefined; }}>Cancel</mux-ui-button>
+      </form>` : nothing}
+      ${detail ? html`<p role="status">${detail}</p>` : nothing}
+    </section>`;
+  }
+
   private async refresh() {
     if (this.loading || (!this.projectId && !this.detail)) return;
     const key = this.refreshKey;
@@ -303,6 +415,7 @@ export class MuxChatCoordination extends LitElement {
           this.detail = detail;
         }
       }
+      await this.refreshWorkChatGoal();
       this.error = '';
     } catch (error) { if (key === this.refreshKey) this.error = String(error); }
     finally { if (key === this.refreshKey) this.loading = false; }
@@ -585,6 +698,8 @@ export class MuxChatCoordination extends LitElement {
       </div>
       <div id="work-detail-panel" class="detail-panel" role="tabpanel" aria-labelledby=${`work-tab-${tab}`} tabindex="0">
       ${tab === 'description' ? html`
+        ${item.goalObservation ? html`<p>Last observed chat goal: ${item.goalObservation.state}${item.goalObservation.summary ? html` · ${item.goalObservation.summary}` : nothing}</p>` : nothing}
+        ${this.renderWorkChatGoal(item)}
         <mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>
         ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}
         ${item.source ? html`<section class="section"><h3>Origin</h3><p>${item.source}</p></section>` : nothing}
