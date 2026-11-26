@@ -71,6 +71,9 @@ func (h *sdkChatHost) finishWorkDispatchLocked(id, ref, state, detail string) (s
 			if state == "uncertain" {
 				copy.BlockedReason = "Muxterm could not confirm whether the selected worker started."
 				copy.NextAction = "Open the selected chat and check whether it received the Work kickoff before resolving this dispatch."
+				if dispatch.GoalMode == "native" {
+					copy.NextAction = "Open the selected chat and inspect its native goal before resolving the dispatch."
+				}
 			}
 			copy.NeedsHuman = true
 			copy.Updates = append(slices.Clone(copy.Updates), sdkWorkUpdate{ID: sdkID(), ClientRef: "dispatch-outcome:" + ref,

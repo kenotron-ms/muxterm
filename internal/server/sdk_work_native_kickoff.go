@@ -14,8 +14,8 @@ func (s *Server) reconcileNativeWorkKickoff(ctx context.Context, id string) {
 	h := s.sdkChats
 	h.mu.Lock()
 	item := h.workItems[id]
-	if item == nil || item.Dispatch == nil || item.Status != "open" ||
-		item.Dispatch.State != "starting" || item.Dispatch.GoalMode != "native" {
+	if item == nil || item.Dispatch == nil || item.Dispatch.GoalMode != "native" ||
+		!(item.Status == "open" && item.Dispatch.State == "starting" || awaitingLateWorkKickoff(item)) {
 		h.mu.Unlock()
 		return
 	}
@@ -40,6 +40,13 @@ func (s *Server) reconcileNativeWorkKickoff(ctx context.Context, id string) {
 	}
 	receiptID := "work-start-goal:" + id + ":" + dispatch.ClientRef
 	index := slices.IndexFunc(goal.Receipts, func(receipt goalReceipt) bool { return receipt.ID == receiptID })
+	if item.Status == "blocked" {
+		if index >= 0 && nativeWorkStartObserved(item, goal, goal.Receipts[index]) && len(h.workWaitingOnLocked(item)) == 0 {
+			h.recoverLateWorkKickoffLocked(item)
+		}
+		h.mu.Unlock()
+		return
+	}
 	elapsed := time.Since(dispatch.UpdatedAt)
 	if index >= 0 && chat.State == "uncertain" && goal.State == "uncertain" && !goal.HumanPaused &&
 		(chat.Harness == "codex" || chat.Harness == "copilot") && elapsed < 4*time.Minute {

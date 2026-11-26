@@ -133,7 +133,8 @@ func awaitingLateWorkKickoff(item *sdkWorkItem) bool {
 		return false
 	}
 	if item.Dispatch.Detail != "chat input acceptance was not confirmed" &&
-		!strings.HasPrefix(item.Dispatch.Detail, "Kickoff delivery could not be confirmed.") {
+		!strings.HasPrefix(item.Dispatch.Detail, "Kickoff delivery could not be confirmed.") &&
+		!strings.HasPrefix(item.Dispatch.Detail, "Native goal activation could not be confirmed.") {
 		return false
 	}
 	for index := len(item.Updates) - 1; index >= 0; index-- {
@@ -163,6 +164,26 @@ func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 	}
 }
 
+func (h *sdkChatHost) recoverLateWorkKickoffLocked(item *sdkWorkItem) {
+	copy := *item
+	dispatch := *item.Dispatch
+	now := time.Now().UTC()
+	dispatch.State, dispatch.Detail, dispatch.UpdatedAt = "sent", "", now
+	copy.Dispatch = &dispatch
+	copy.Status, copy.BlockedReason, copy.NeedsHuman = "open", "", false
+	copy.NextAction = "The selected worker started and can claim this Work."
+	copy.UpdatedAt = now
+	copy.Revision++
+	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
+		ID: sdkID(), ClientRef: "dispatch-recovered:" + dispatch.ClientRef, At: now,
+		Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Confirmed the original worker received kickoff",
+		Status: "open", NextAction: &copy.NextAction, LinkedSessionID: dispatch.SessionID,
+	})
+	if err := h.saveWorkLocked(&copy); err != nil {
+		log.Printf("recover late Work kickoff %s: %v", item.ID, err)
+	}
+}
+
 func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 	h := s.sdkChats
 	h.mu.Lock()
@@ -176,23 +197,7 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 		_, accepted, _ := h.workKickoffReceiptLocked(item)
 		worker := h.chats[item.Dispatch.SessionID]
 		if accepted && worker != nil && !worker.Archived && len(h.workWaitingOnLocked(item)) == 0 {
-			copy := *item
-			dispatch := *item.Dispatch
-			now := time.Now().UTC()
-			dispatch.State, dispatch.Detail, dispatch.UpdatedAt = "sent", "", now
-			copy.Dispatch = &dispatch
-			copy.Status, copy.BlockedReason, copy.NeedsHuman = "open", "", false
-			copy.NextAction = "The selected worker received kickoff and can claim this Work."
-			copy.UpdatedAt = now
-			copy.Revision++
-			copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
-				ID: sdkID(), ClientRef: "dispatch-recovered:" + dispatch.ClientRef, At: now,
-				Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Confirmed the original worker received kickoff",
-				Status: "open", NextAction: &copy.NextAction, LinkedSessionID: dispatch.SessionID,
-			})
-			if err := h.saveWorkLocked(&copy); err != nil {
-				log.Printf("recover late Work kickoff %s: %v", id, err)
-			}
+			h.recoverLateWorkKickoffLocked(item)
 		}
 		h.mu.Unlock()
 		return
