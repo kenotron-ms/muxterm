@@ -1653,7 +1653,7 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'question.requested' || event.type === 'question.suggested') {
       const questions = (event.raw as {questions?:QuestionPrompt[]} | undefined)?.questions;
-      if (questions?.length) {
+      if (questions?.length && !blocks.some(block => block.kind === 'question' && block.id === event.itemId)) {
         // A question request, like a tool call, keeps preceding assistant text
         // in the in-turn timeline instead of treating it as the final reply.
         const last = blocks[blocks.length - 1];
@@ -1665,7 +1665,7 @@ export class MuxSDKChat extends LitElement {
     }
     else if (event.type === 'question.answered' || event.type === 'question.resolved') {
       const index = blocks.findIndex(block => block.kind === 'question' && block.id === event.itemId);
-      if (index >= 0) blocks[index] = { ...blocks[index], done:true };
+      if (index >= 0) blocks[index] = { ...blocks[index], done:true, text:event.type === 'question.resolved' ? event.message || 'Question closed' : 'Answered' };
     }
     else if (event.type === 'turn.started') {
       this.busy = true;
@@ -2609,14 +2609,15 @@ export class MuxSDKChat extends LitElement {
     if (!this.commandFailed) this.dismissGoalifyChoice(key);
   }
   private questionCard(block: Block) {
-    return html`<mux-ui-question-form agentLabel=${this.chat?.harness === 'opencode' ? 'OpenCode' : 'Codex'} .questions=${block.input as QuestionPrompt[]} .answered=${!!block.done}
+    return html`<mux-ui-question-form agentLabel=${this.chat?.harness === 'opencode' ? 'OpenCode' : 'Codex'} .questions=${block.input as QuestionPrompt[]} .answered=${!!block.done} .outcome=${block.text}
+      .dismissible=${this.chat?.harness === 'opencode' && block.source === 'question.requested'}
+      @question-dismiss=${() => void this.submitQuestion({},block,true)}
       .pending=${this.answeringQuestion === block.id} .error=${this.questionErrorId === block.id ? this.questionError : ''}
-      @question-submit=${(event:CustomEvent<Record<string,string>>) => void this.submitQuestion(event,block)}></mux-ui-question-form>`;
+      @question-submit=${(event:CustomEvent<Record<string,string>>) => void this.submitQuestion(event.detail,block)}></mux-ui-question-form>`;
   }
-  private async submitQuestion(event: CustomEvent<Record<string,string>>, block: Block) {
-    if (block.done || !block.id || this.answeringQuestion) return;
+  private async submitQuestion(answers: Record<string,string>, block: Block, dismiss = false) {
+    if (!block.id || this.answeringQuestion || !this.blocks.some(item => item === block && !item.done)) return;
     const questions = block.input as QuestionPrompt[];
-    const answers = event.detail;
     const sessionId = this.activeSession;
     this.answeringQuestion = block.id;
     this.questionErrorId = block.id;
@@ -2624,13 +2625,15 @@ export class MuxSDKChat extends LitElement {
     try {
       const blocking = block.source === 'question.requested';
       const response = await fetch(this.chatPath(blocking ? `/api/sdk-chats/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(block.id)}` : `/api/sdk-chats/${encodeURIComponent(sessionId)}`), {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(blocking ? {answers} : {kind:this.busy ? 'steer' : 'user',source:'browser',id:`question-answer:${block.id}:${crypto.randomUUID()}`,content:questions.map(question => `${question.question}\n${answers[question.id]}`).join('\n\n')})
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(blocking ? (dismiss ? {dismiss} : {answers}) : {kind:this.busy ? 'steer' : 'user',source:'browser',id:`question-answer:${block.id}:${crypto.randomUUID()}`,content:questions.map(question => `${question.question}\n${answers[question.id]}`).join('\n\n')})
       });
       if (!response.ok) throw new Error((await response.text()).trim() || 'Could not send answer');
-      if (this.activeSession === sessionId) this.blocks = this.blocks.map(item => item.key === block.key ? {...item,done:true} : item);
+      if (!blocking && this.activeSession === sessionId) this.blocks = this.blocks.map(item => item.key === block.key ? {...item,done:true} : item);
     } catch (error) {
       if (this.activeSession === sessionId) { this.questionErrorId = block.id; this.questionError = String(error instanceof Error ? error.message : error); }
-    } finally { this.answeringQuestion = ''; }
+    } finally {
+      if (this.activeSession === sessionId && this.answeringQuestion === block.id) this.answeringQuestion = '';
+    }
   }
   private digestState(entry: DigestEntry): {tone:'attention'|'done'|'progress'; label:string; action:string; description:string; title:string} {
     const work = entry.work;

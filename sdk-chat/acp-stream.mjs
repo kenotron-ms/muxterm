@@ -231,7 +231,6 @@ export class ACPStream {
     this.interruptForSteer = false;
     this.stopDuringSteer = false;
     this.userStopRequested = false;
-    this.questionDismissed = false;
     this.turnInputIds = [];
     this.continuedInputIds = [];
     const profile = profiles[session.harness];
@@ -310,7 +309,7 @@ export class ACPStream {
   onExit(error) {
     if (this.closed || this.exitError) return;
     this.exitError = error;
-    this.resolveElicitations();
+    this.resolveElicitations('Agent disconnected');
     if (this.busy) this.emit(this.session.id, 'session.uncertain', { message: String(error) });
     this.onProcessExit?.();
   }
@@ -342,7 +341,7 @@ export class ACPStream {
           { label: 'Disable web search', description: 'OpenCode will remember this choice.' },
           { label: 'Not now', description: 'Cancel this search without saving a choice.' }] }];
       return new Promise(resolve => {
-        this.pendingElicitations.set(questionId, resolve);
+        this.pendingElicitations.set(questionId, { resolve });
         this.emit(this.session.id, 'question.requested', { itemId: questionId, raw: { questions, isBlocking: true } });
       });
     }
@@ -356,12 +355,70 @@ export class ACPStream {
       return { action: 'accept', content: { provider: 'exa' } };
     }
     this.selectExaNext = false;
-    return { action: 'cancel' };
+    if (params.requestedSchema?.type !== 'object' || !fields) return { action: 'cancel' };
+    const questions = [];
+    const optionsByField = new Map();
+    for (const [id, field] of Object.entries(fields)) {
+      if (id.endsWith('_custom') && fields[id.slice(0, -7)]) continue;
+      const multiple = field.type === 'array';
+      const schema = multiple ? field.items : field;
+      const choices = schema?.oneOf ?? schema?.anyOf;
+      if (multiple && !choices?.length) return { action: 'cancel' };
+      if ((!multiple && field.type !== 'string') || (choices && (!Array.isArray(choices) || !choices.every(option => typeof option?.const === 'string'))))
+        return { action: 'cancel' };
+      const options = choices?.map(option => ({
+        label: option.title || option.const, value: option.const, description: option.description || '',
+      })) ?? null;
+      optionsByField.set(id, options);
+      questions.push({
+        id, header: field.title || '', question: field.description || field.title || params.message,
+        isOther: fields[id + '_custom']?.type === 'string', isSecret: false, multiple, options,
+      });
+    }
+    if (!questions.length) return { action: 'cancel' };
+    this.confirmAccepted?.();
+    const questionId = randomUUID();
+    return new Promise(resolve => {
+      this.pendingElicitations.set(questionId, { resolve, questions, optionsByField, toolCallId: params.toolCallId });
+      this.emit(this.session.id, 'question.requested', { itemId: questionId, raw: { questions, isBlocking: true } });
+    });
   }
 
-  answerElicitation(questionId, answers) {
-    const resolve = this.pendingElicitations.get(questionId);
-    if (!resolve) throw new Error('This question is no longer waiting for an answer');
+  answerElicitation(questionId, answers, dismiss) {
+    const pending = this.pendingElicitations.get(questionId);
+    if (!pending) throw new Error('This question is no longer waiting for an answer');
+    const { resolve, questions, optionsByField } = pending;
+    if (dismiss) {
+      this.pendingElicitations.delete(questionId);
+      this.emit(this.session.id, 'question.resolved', { itemId: questionId, message: 'Dismissed by you' });
+      resolve({ action: 'decline' });
+      return { status: 'accepted' };
+    }
+    if (questions) {
+      const content = Object.create(null);
+      for (const question of questions) {
+        const answer = answers?.[question.id];
+        if (typeof answer !== 'string' || !answer.trim()) throw new Error('Answer each question to continue');
+        const options = optionsByField.get(question.id);
+        if (question.multiple) {
+          const selection = JSON.parse(answer);
+          const values = selection?.values;
+          const custom = selection?.custom;
+          if (!Array.isArray(values) || new Set(values).size !== values.length ||
+              !values.every(value => options.some(option => option.value === value)) ||
+              (custom && (!question.isOther || typeof custom !== 'string')) || (!values.length && !custom))
+            throw new Error('Choose one or more offered answers');
+          content[question.id] = values;
+          if (custom) content[question.id + '_custom'] = custom;
+        } else if (!options || options.some(option => option.value === answer)) content[question.id] = answer;
+        else if (question.isOther) content[question.id + '_custom'] = answer;
+        else throw new Error('Choose one of the offered answers');
+      }
+      this.pendingElicitations.delete(questionId);
+      resolve({ action: 'accept', content });
+      this.emit(this.session.id, 'question.answered', { itemId: questionId });
+      return { status: 'accepted' };
+    }
     const choice = answers?.choice;
     if (!['Use Exa', 'Disable web search', 'Not now'].includes(choice))
       throw new Error('Choose one of the offered answers');
@@ -375,10 +432,10 @@ export class ACPStream {
     return { status: 'accepted' };
   }
 
-  resolveElicitations() {
-    for (const [questionId, resolve] of this.pendingElicitations) {
+  resolveElicitations(message) {
+    for (const [questionId, { resolve }] of this.pendingElicitations) {
       resolve({ action: 'cancel' });
-      this.emit(this.session.id, 'question.resolved', { itemId: questionId });
+      this.emit(this.session.id, 'question.resolved', { itemId: questionId, message });
     }
     this.pendingElicitations.clear();
     this.selectExaNext = false;
@@ -414,7 +471,6 @@ export class ACPStream {
     if (this.busy && (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan', 'usage_update'].includes(update.sessionUpdate)
       || (update.sessionUpdate === 'session_info_update' && update._meta?.piAcp?.running === true))) this.confirmAccepted?.();
     if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && messageText) {
-      this.questionDismissed = false;
       if (this.nativeGoal) {
         this.nativeGoal.output = (this.nativeGoal.output + messageText).slice(-4096);
         const state = this.nativeGoal.output.includes('<!-- GOAL_COMPLETE -->') ? 'complete'
@@ -449,10 +505,16 @@ export class ACPStream {
         this.emit(this.session.id, 'tool.started', { toolId: id, name, raw: input });
       }
       if (update.status === 'completed' || update.status === 'failed') {
-        if (this.session.harness === 'opencode' && name === 'question' && update.status === 'failed' &&
-            /the user dismissed this question/i.test(JSON.stringify(update.rawOutput ?? update.content ?? '')))
-          this.questionDismissed = true;
-        this.emit(this.session.id, 'tool.completed', { toolId: id, name, raw: update.rawOutput ?? update.content ?? null,
+        const raw = update.rawOutput ?? update.content ?? null;
+        const questionCancelled = this.session.harness === 'opencode' && name === 'question' &&
+          update.status === 'failed' && /the user dismissed this question/i.test(JSON.stringify(raw));
+        for (const [questionId, pending] of this.pendingElicitations) {
+          if (!pending.toolCallId || pending.toolCallId !== id) continue;
+          this.pendingElicitations.delete(questionId);
+          this.emit(this.session.id, 'question.resolved', { itemId: questionId, message: 'Agent ended the question' });
+          pending.resolve({ action: 'cancel' });
+        }
+        this.emit(this.session.id, 'tool.completed', { toolId: id, name, raw: questionCancelled ? { error: 'OpenCode cancelled the question' } : raw,
           failed: update.status === 'failed' });
         this.tools.delete(id);
       }
@@ -637,7 +699,7 @@ export class ACPStream {
     if (this.antigravityStopEmitted) return;
     this.antigravityStopEmitted = true;
     this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds, message: 'cancelled',
-      cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
+      cancelReason: this.userStopRequested ? 'user' : 'agent' });
   }
 
   async startPrompt(input, prompt) {
@@ -645,7 +707,6 @@ export class ACPStream {
     this.session.busy = true;
     this.session.cancelRequested = false;
     this.userStopRequested = false;
-    this.questionDismissed = false;
     this.turnActivity = false;
     this.turnInputIds = [...this.continuedInputIds, input.id];
     this.continuedInputIds = [];
@@ -673,7 +734,7 @@ export class ACPStream {
       } else if (result.stopReason === 'cancelled') {
         this.reminderCursor = 0;
         this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds,
-          message: result.stopReason, cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
+          message: result.stopReason, cancelReason: this.userStopRequested ? 'user' : 'agent' });
       }
       else if (result.stopReason === 'end_turn' && !this.turnActivity) {
         this.reminderCursor = 0;
@@ -690,7 +751,7 @@ export class ACPStream {
       if (!accepted) rejectEvidence(error);
       else if (this.interruptForSteer && this.stopDuringSteer && !this.exitError && !this.closed)
         this.emit(this.session.id, 'turn.cancelled', { inputIds: this.turnInputIds,
-          message: 'cancelled', cancelReason: this.userStopRequested ? 'user' : this.questionDismissed ? 'question_dismissed' : 'agent' });
+          message: 'cancelled', cancelReason: this.userStopRequested ? 'user' : 'agent' });
       else if (this.interruptForSteer && !this.exitError && !this.closed) {
         this.continuedInputIds = this.turnInputIds;
         this.emit(this.session.id, 'turn.continued');
@@ -708,6 +769,7 @@ export class ACPStream {
         this.busy = false;
         this.session.busy = false;
       }
+      this.resolveElicitations('Turn ended');
       this.session.cancelRequested = false;
       this.userStopRequested = false;
       this.confirmAccepted = null;
@@ -721,9 +783,9 @@ export class ACPStream {
     if (this.steerPending) this.stopDuringSteer = true;
     this.session.cancelRequested = true;
     this.userStopRequested = true;
-    this.resolveElicitations();
     try { await this.connection.cancel({ sessionId: this.session.nativeId }); }
-    catch (error) { this.userStopRequested = false; throw error; }
+    catch (error) { this.userStopRequested = false; this.session.cancelRequested = false; throw error; }
+    this.resolveElicitations('Turn stopped');
     return { status: 'accepted' };
   }
 
@@ -762,7 +824,7 @@ export class ACPStream {
   async close() {
     if (this.closed) return;
     this.closed = true;
-    this.resolveElicitations();
+    this.resolveElicitations('Chat closed');
     await this.ready.catch(() => {});
     this.runtime.detach(this);
     if (this.session.harness === 'opencode') {
