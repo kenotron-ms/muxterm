@@ -164,12 +164,13 @@ func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 			return
 		}
 		s.reconcileWorkKickoff(ctx, id)
+		s.releaseWorkKickoffGoal(ctx, id)
 	}
 	for _, id := range held {
 		if ctx.Err() != nil {
 			return
 		}
-		s.releaseWorkKickoffGoal(id)
+		s.releaseWorkKickoffGoal(ctx, id)
 	}
 }
 

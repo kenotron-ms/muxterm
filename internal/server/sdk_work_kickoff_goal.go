@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log"
 	"slices"
 	"time"
@@ -8,7 +9,7 @@ import (
 
 // Resume the initial Codex goal after the worker's input is admitted. The
 // goal receipt also fences a restart during the native resume itself.
-func (s *Server) releaseWorkKickoffGoal(id string) {
+func (s *Server) releaseWorkKickoffGoal(ctx context.Context, id string) {
 	h := s.sdkChats
 	h.workSendMu.Lock()
 	defer h.workSendMu.Unlock()
@@ -31,6 +32,24 @@ func (s *Server) releaseWorkKickoffGoal(id string) {
 	h.mu.Unlock()
 	if !accepted {
 		return
+	}
+
+	// A restart can leave the browser chat uncertain even though the
+	// native thread and its paused goal survived. Reattach and observe the
+	// native goal before reserving release for the already-accepted input.
+	goal, err := h.goals.update(chat, nil)
+	if err != nil {
+		log.Printf("read Work kickoff goal %s: %v", id, err)
+		return
+	}
+	if goal.State == "uncertain" && !goal.HumanPaused && goal.AgentPauseRevision == 0 {
+		resumeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := h.resume(resumeCtx, &chat)
+		cancel()
+		if err != nil {
+			log.Printf("reconcile accepted Work kickoff goal %s: %v", id, err)
+			return
+		}
 	}
 
 	installID := "work-start-goal:" + id + ":" + dispatch.ClientRef
