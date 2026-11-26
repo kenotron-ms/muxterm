@@ -164,6 +164,6 @@ func (s *Server) handleSDKWorkGoalReplace(w http.ResponseWriter, r *http.Request
 	if document.Mode == "muxterm-work" {
 		action = "pause"
 	}
-	go h.dispatchGoal(*chat, receiptID, action, condition, true, document.RequestedRevision, document.ControlVersion)
+	go h.dispatchGoal(*chat, receiptID, action, condition, true, document.RequestedRevision, document.ControlVersion, "")
 	writeSDKJSON(w, http.StatusAccepted, &copy)
 }
