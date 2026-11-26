@@ -33,9 +33,14 @@ func workKickoffRef(item *sdkWorkItem) string {
 	return ref
 }
 
+func workStarting(item *sdkWorkItem) bool {
+	return item != nil && item.Dispatch != nil && item.Dispatch.State == "starting" &&
+		(item.Status == "open" && item.OwnerSessionID == "" ||
+			item.Status == "active" && item.OwnerSessionID == item.Dispatch.SessionID)
+}
+
 func (h *sdkChatHost) workKickoffEligibleLocked(item *sdkWorkItem) bool {
-	if item == nil || item.Dispatch == nil || item.Dispatch.State != "starting" || item.OwnerSessionID != "" ||
-		item.Status != "open" || item.Readiness != "ready" || item.HeldByHuman || !workGoalDispatchAuthorized(item) ||
+	if !workStarting(item) || item.Dispatch.WorkGoalRevision != 0 && item.Dispatch.WorkGoalRevision != item.GoalRevision || item.Readiness != "ready" || item.HeldByHuman || !workGoalDispatchAuthorized(item) ||
 		len(h.workWaitingOnLocked(item)) != 0 {
 		return false
 	}
@@ -128,7 +133,7 @@ func (h *sdkChatHost) workKickoffEventLocked(chatID, inputID string) bool {
 // Recognize blocks written by the dispatcher itself. A later status decision
 // takes precedence over receipt reconciliation.
 func awaitingLateWorkKickoff(item *sdkWorkItem) bool {
-	if item.Dispatch == nil || item.Dispatch.State != "uncertain" || item.OwnerSessionID != "" ||
+	if item.Dispatch == nil || item.Dispatch.State != "uncertain" || item.OwnerSessionID != "" && item.OwnerSessionID != item.Dispatch.SessionID ||
 		item.Status != "blocked" || item.HeldByHuman || item.Readiness != "ready" {
 		return false
 	}
@@ -151,7 +156,7 @@ func (s *Server) reconcileWorkKickoffs(ctx context.Context) {
 	var pending []string
 	h.mu.Lock()
 	for id, item := range h.workItems {
-		if item.Dispatch != nil && (item.Dispatch.State == "starting" && item.Status == "open" || awaitingLateWorkKickoff(item)) {
+		if workStarting(item) || awaitingLateWorkKickoff(item) {
 			pending = append(pending, id)
 		}
 	}
@@ -172,12 +177,16 @@ func (h *sdkChatHost) recoverLateWorkKickoffLocked(item *sdkWorkItem) {
 	copy.Dispatch = &dispatch
 	copy.Status, copy.BlockedReason, copy.NeedsHuman = "open", "", false
 	copy.NextAction = "The selected worker started and can claim this Work."
+	if copy.OwnerSessionID == dispatch.SessionID {
+		copy.Status = "active"
+		copy.NextAction = "The assigned worker can continue this Work."
+	}
 	copy.UpdatedAt = now
 	copy.Revision++
 	copy.Updates = append(slices.Clone(item.Updates), sdkWorkUpdate{
 		ID: sdkID(), ClientRef: "dispatch-recovered:" + dispatch.ClientRef, At: now,
 		Actor: sdkWorkActor{Kind: "external-tool"}, Summary: "Confirmed the original worker received kickoff",
-		Status: "open", NextAction: &copy.NextAction, LinkedSessionID: dispatch.SessionID,
+		Status: copy.Status, NextAction: &copy.NextAction, LinkedSessionID: dispatch.SessionID,
 	})
 	if err := h.saveWorkLocked(&copy); err != nil {
 		log.Printf("recover late Work kickoff %s: %v", item.ID, err)
@@ -202,7 +211,7 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 		h.mu.Unlock()
 		return
 	}
-	if item == nil || item.Dispatch == nil || item.Status != "open" || item.Dispatch.State != "starting" {
+	if !workStarting(item) {
 		h.mu.Unlock()
 		return
 	}
@@ -243,6 +252,12 @@ func (s *Server) reconcileWorkKickoff(ctx context.Context, id string) {
 	dispatch.KickoffAttempts++
 	dispatch.UpdatedAt = time.Now().UTC()
 	copy.Dispatch = &dispatch
+	if copy.OwnerSessionID == "" {
+		// Older servers persisted this reservation before binding an owner.
+		assignWorkWorker(&copy, &dispatch)
+		copy.Revision++
+		copy.UpdatedAt = dispatch.UpdatedAt
+	}
 	// An attempt is internal progress. Keep the revision stable for a worker
 	// that races its first Work update against receipt reconciliation.
 	if err := h.saveWorkLocked(&copy); err != nil {

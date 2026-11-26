@@ -339,7 +339,7 @@ func (s *Server) activeUpdateWork() string {
 			h.mu.Unlock()
 			return "Work is active; automatic update deferred."
 		}
-		if item.Dispatch != nil && (item.Dispatch.State == "preparing" || item.Dispatch.State == "sent" || item.Dispatch.State == "claimed") && item.Status != "done" && item.Status != "cancelled" {
+		if item.Dispatch != nil && (item.Dispatch.State == "preparing" || item.Dispatch.State == "starting" || item.Dispatch.State == "sent" || item.Dispatch.State == "claimed") && item.Status != "done" && item.Status != "cancelled" {
 			h.mu.Unlock()
 			return "Work dispatch is in progress; automatic update deferred."
 		}

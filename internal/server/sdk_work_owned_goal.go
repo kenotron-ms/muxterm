@@ -172,7 +172,7 @@ func (s *Server) reconcileWorkOwnedGoals(ctx context.Context) {
 	var reserved sdkWorkItem
 	var chatID, eventID string
 	for _, item := range h.workItems {
-		if item.Status != "active" || item.OwnerSessionID == "" || item.Dispatch == nil || item.Dispatch.GoalMode != "muxterm-work" {
+		if item.Status != "active" || item.OwnerSessionID == "" || item.Dispatch == nil || item.Dispatch.GoalMode != "muxterm-work" || item.Dispatch.State == "starting" {
 			continue
 		}
 		chat := h.chats[item.OwnerSessionID]
