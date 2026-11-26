@@ -24,7 +24,12 @@ func (s *Server) wakeWork() {
 func (h *sdkChatHost) workActiveCountLocked(projectID, exceptID string) int {
 	count := 0
 	for _, item := range h.workItems {
-		if item.ID == exceptID || item.Status == "done" || item.Status == "cancelled" || item.Status == "blocked" || item.Status == "review" || (item.Status != "active" && item.Readiness != "ready") {
+		if item.ID == exceptID || item.Status == "done" || item.Status == "cancelled" || item.Status == "review" || (item.Status != "active" && item.Readiness != "ready") {
+			continue
+		}
+		// A lost acknowledgement can still belong to a running assigned
+		// worker. Keep its reservation until delivery or a human decision.
+		if item.Status == "blocked" && (item.OwnerSessionID == "" || !awaitingLateWorkKickoff(item)) {
 			continue
 		}
 		projects := h.workProjectIDsLocked(item)
