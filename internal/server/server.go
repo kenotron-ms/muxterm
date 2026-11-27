@@ -453,7 +453,7 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-chats/{id}/inbox-attention", protect(http.HandlerFunc(s.handleSDKInboxAttention)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/inbox-attention/ack", protect(http.HandlerFunc(s.handleSDKInboxAttentionAck)))
 	s.mux.Handle("GET /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
-	s.mux.Handle("POST /api/sdk-work/github/{owner}/{repo}", protect(http.HandlerFunc(s.handleWorkGitHubSync)))
+	s.mux.Handle("POST /api/work-github-sync/{owner}/{repo}", protect(http.HandlerFunc(s.handleWorkGitHubSync)))
 	s.mux.Handle("GET /api/sdk-work/next", protect(http.HandlerFunc(s.handleSDKNextWork)))
 	s.mux.Handle("POST /api/sdk-work/graph", protect(http.HandlerFunc(s.handleSDKWorkGraph)))
 	s.mux.Handle("POST /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))

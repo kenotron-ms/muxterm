@@ -887,7 +887,7 @@ export class MuxChatCoordination extends LitElement {
     this.githubError = '';
     try {
       const path = repo.split('/').map(encodeURIComponent).join('/');
-      const result = await this.request<{issues:GitHubIncomingIssue[] | null}>(`/api/sdk-work/github/${path}`, {method:'POST'});
+      const result = await this.request<{issues:GitHubIncomingIssue[] | null}>(`/api/work-github-sync/${path}`, {method:'POST'});
       if (key !== this.refreshKey) return;
       this.githubRepo = repo;
       this.githubIssues = result.issues ?? [];
