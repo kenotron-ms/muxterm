@@ -16,6 +16,7 @@ import type { MuxUIRangeField } from '../ui/range-field.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextArea } from '../ui/text-area.js';
 
+type GitHubIncomingIssue = {number:number; title:string; assignees:{login:string}[]};
 type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; choiceSource?: string; goalMode?: 'native' | 'muxterm-work'; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped' };
@@ -281,6 +282,10 @@ export class MuxChatCoordination extends LitElement {
       this.detail = undefined;
       this.control = undefined;
       this.labelFilter = '';
+      this.githubRepo = localStorage.getItem(`work-github-repo:${this.projectId}`) ?? '';
+      this.githubIssues = undefined;
+      this.githubError = '';
+      this.githubSyncing = false;
       void this.refresh();
     }
   }
@@ -866,7 +871,59 @@ export class MuxChatCoordination extends LitElement {
       </div>
     </article>`;
   }
+  @state() private githubRepo = '';
+  @state() private githubIssues?: GitHubIncomingIssue[];
+  @state() private githubError = '';
+  @state() private githubSyncing = false;
+
+  private async syncGitHub() {
+    const repo = this.githubRepo.trim();
+    if (!/^[a-z0-9_.-]{1,100}\/[a-z0-9_.-]{1,100}$/i.test(repo)) {
+      this.githubError = 'Enter a GitHub repository as owner/repo.';
+      return;
+    }
+    const key = this.refreshKey;
+    this.githubSyncing = true;
+    this.githubError = '';
+    try {
+      const path = repo.split('/').map(encodeURIComponent).join('/');
+      const result = await this.request<{issues:GitHubIncomingIssue[] | null}>(`/api/sdk-work/github/${path}`, {method:'POST'});
+      if (key !== this.refreshKey) return;
+      this.githubRepo = repo;
+      this.githubIssues = result.issues ?? [];
+      localStorage.setItem(`work-github-repo:${this.projectId}`, repo);
+    } catch (error) {
+      if (key === this.refreshKey) this.githubError = (error as Error).message;
+    } finally {
+      if (key === this.refreshKey) this.githubSyncing = false;
+    }
+  }
+
+  private githubInbox() {
+    return html`<section class="section" aria-label="Incoming GitHub issues">
+      <form @submit=${(event:SubmitEvent) => { event.preventDefault(); void this.syncGitHub(); }}>
+        <label>GitHub repository <input placeholder="owner/repo" .value=${this.githubRepo}
+          ?disabled=${this.githubSyncing} @input=${(event:Event) => {
+            this.githubRepo = (event.target as HTMLInputElement).value;
+            this.githubIssues = undefined;
+            this.githubError = '';
+          }}></label>
+        <mux-ui-button type="submit" ?disabled=${this.githubSyncing}
+          @click=${(event:Event) => { event.preventDefault(); void this.syncGitHub(); }}>
+          ${this.githubSyncing ? 'Syncing…' : this.githubRepo.trim() ? `Sync from ${this.githubRepo.trim()}` : 'Sync issues'}
+        </mux-ui-button>
+      </form>
+      ${this.githubError ? html`<p role="alert">${this.githubError}</p>` : nothing}
+      ${this.githubIssues ? html`<h3>Incoming</h3>
+        ${this.githubIssues.length ? html`<ul>${this.githubIssues.map(issue => html`<li>
+          <a target="_blank" rel="noopener noreferrer" href=${`https://github.com/${this.githubRepo.split('/').map(encodeURIComponent).join('/')}/issues/${issue.number}`}>
+            #${issue.number} ${issue.title}
+          </a> <small>${issue.assignees.map(a => a.login).join(', ')}</small>
+        </li>`)}</ul>` : html`<p>No assigned issues labeled muxterm:work.</p>`}
+      ` : nothing}
+    </section>`;
+  }
   override render() {
-    return html`<div class=${this.detail ? 'wrap detail-wrap' : 'wrap'}><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? this.list() : nothing}</div>`;
+    return html`<div class=${this.detail ? 'wrap detail-wrap' : 'wrap'}><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? html`${!this.remoteHost ? this.githubInbox() : nothing}${this.list()}` : nothing}</div>`;
   }
 }
