@@ -86,6 +86,7 @@ func (s *Server) workLoop(ctx context.Context) {
 
 func (s *Server) reconcileWork(ctx context.Context) {
 	s.reconcileWorkKickoffs(ctx)
+	s.reconcileWorkGoalCompletion(ctx)
 	s.reconcileWorkFailures()
 	s.reconcileWorkOwnedGoals(ctx)
 	attempted := make(map[string]bool)

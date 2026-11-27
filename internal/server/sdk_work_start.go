@@ -353,8 +353,15 @@ func workKickoffPrompt(item *sdkWorkItem) string {
 		prompt += " Filed plan update protocol: " + item.PlanProtocol
 	}
 	if item.GraphID != "" {
-		prompt += "\n\nTo finish this filed graph item, record a concrete outcome and references to verification evidence with the done update. The final integration item must account for the filed release checks. If an external decision or credential is needed, record that specific gate and leave Work incomplete."
+		prompt += "\n\nThe final integration item must account for the filed release checks."
 	}
+	if goalMode == "muxterm-work" || (item.Dispatch.Configuration != nil &&
+		slices.Contains([]string{"codex", "copilot", "antigravity"}, item.Dispatch.Configuration.Harness)) {
+		prompt += "\n\nWhen the filed checks pass, finish the plan and record a concrete outcome and verification references together in update_work_item with the current expected_revision. Leave the status active unless a separate review or external decision is required. Muxterm marks documented Work Done after the matched goal finishes."
+	} else {
+		prompt += "\n\nWhen the filed checks pass, finish the plan and record a concrete outcome and verification references in the Work done update."
+	}
+	prompt += " If an external decision or credential is needed, record that specific gate and leave Work incomplete."
 	return prompt
 }
 
