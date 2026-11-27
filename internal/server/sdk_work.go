@@ -91,6 +91,8 @@ type sdkWorkItem struct {
 	CreatedAt          time.Time                `json:"createdAt"`
 	UpdatedAt          time.Time                `json:"updatedAt"`
 	Updates            []sdkWorkUpdate          `json:"updates"`
+	GitHubResultURL    string                   `json:"githubResultUrl,omitempty"`
+	GitHubSource       *workGitHubSource        `json:"githubSource,omitempty"`
 	CommentReadBy      map[string]string        `json:"commentReadBy,omitempty"`
 	CommentNotice      *sdkWorkCommentNotice    `json:"commentNotice,omitempty"`
 	CommentBoundary    *sdkWorkCommentNotice    `json:"commentBoundary,omitempty"`
@@ -634,29 +636,38 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ClientRef         string        `json:"clientRef"`
-		Title             string        `json:"title"`
-		Brief             string        `json:"brief"`
-		Harness           string        `json:"harness"`
-		Source            string        `json:"source"`
-		NextAction        string        `json:"nextAction"`
-		OwnerSessionID    string        `json:"ownerSessionId"`
-		Acceptance        string        `json:"acceptanceCriteria"`
-		GoalCondition     string        `json:"goalCondition"`
-		Draft             bool          `json:"draft"`
-		ReviewerSessionID string        `json:"reviewerSessionId"`
-		SessionIDs        []string      `json:"sessionIds"`
-		ProjectIDs        *[]string     `json:"projectIds"`
-		Labels            []string      `json:"labels"`
-		DependsOn         []string      `json:"dependsOn"`
-		UIWork            bool          `json:"uiWork"`
-		Plan              []sdkWorkStep `json:"plan"`
-		PlanProtocol      string        `json:"planProtocol"`
+		ClientRef         string            `json:"clientRef"`
+		Title             string            `json:"title"`
+		Brief             string            `json:"brief"`
+		Harness           string            `json:"harness"`
+		Source            string            `json:"source"`
+		NextAction        string            `json:"nextAction"`
+		OwnerSessionID    string            `json:"ownerSessionId"`
+		Acceptance        string            `json:"acceptanceCriteria"`
+		GoalCondition     string            `json:"goalCondition"`
+		Draft             bool              `json:"draft"`
+		ReviewerSessionID string            `json:"reviewerSessionId"`
+		SessionIDs        []string          `json:"sessionIds"`
+		ProjectIDs        *[]string         `json:"projectIds"`
+		Labels            []string          `json:"labels"`
+		DependsOn         []string          `json:"dependsOn"`
+		UIWork            bool              `json:"uiWork"`
+		Plan              []sdkWorkStep     `json:"plan"`
+		GitHubSource      *workGitHubSource `json:"githubSource"`
+		PlanProtocol      string            `json:"planProtocol"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req) != nil || strings.TrimSpace(req.ClientRef) == "" || len(req.ClientRef) > 256 || strings.TrimSpace(req.Title) == "" || len(req.Title) > 200 || len(req.Brief) > 32<<10 || !validWorkHarness(req.Harness) || len(req.Source) > 4096 || len(req.NextAction) > 4096 || len(req.Acceptance) > 16<<10 || len([]rune(req.GoalCondition)) > 4000 || len(req.SessionIDs) > 32 || len(req.DependsOn) > 32 || (req.ProjectIDs != nil && len(*req.ProjectIDs) > 32) {
 		http.Error(w, "clientRef and title required", 400)
 		return
 	}
+	if req.GitHubSource != nil {
+		if !humanBrowserRequest(r) || !req.GitHubSource.valid() || req.Draft || req.ProjectIDs == nil || len(*req.ProjectIDs) != 1 {
+			http.Error(w, "GitHub intake requires a valid issue and one project", http.StatusBadRequest)
+			return
+		}
+		req.Source = req.GitHubSource.url()
+	}
+
 	goal := strings.TrimSpace(req.GoalCondition)
 	if req.Plan != nil {
 		if err := validWorkSteps(req.Plan, true); err != nil {
@@ -732,6 +743,16 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, item := range h.workItems {
+		if req.GitHubSource != nil && item.GitHubSource != nil && req.GitHubSource.ID == item.GitHubSource.ID && slices.Equal(h.workProjectIDsLocked(item), projectIDs) {
+			copy := *item
+			copy.CreatedBy = h.workCreatorLocked(item)
+			copy.ProjectIDs = slices.Clone(projectIDs)
+			copy.WaitingOn = h.workWaitingOnLocked(item)
+			h.mu.Unlock()
+			s.wakeWork()
+			writeSDKJSON(w, http.StatusOK, copy)
+			return
+		}
 		if h.workCreatorLocked(item) == creator && item.ClientRef == req.ClientRef {
 			createdWith := item.CreateSessionIDs
 			if createdWith == nil {
@@ -821,7 +842,7 @@ func (s *Server) handleSDKWork(w http.ResponseWriter, r *http.Request) {
 	item := &sdkWorkItem{ID: sdkID(), Reference: reference, ClientRef: req.ClientRef, Title: req.Title, Brief: req.Brief, Harness: req.Harness, CreateHarness: req.Harness, CreateTitle: &req.Title, CreateBrief: &req.Brief, CreateGoal: createGoal, CreateDraft: req.Draft, Source: strings.TrimSpace(req.Source), Readiness: readiness, GoalCondition: goal, GoalRevision: goalRevision, GoalFiledRevision: filedRevision, GoalCheck: goalCheck, NextAction: strings.TrimSpace(req.NextAction), CreateNextAction: strings.TrimSpace(req.NextAction),
 		Status: "open", CreatedBy: creator, OwnerSessionID: req.OwnerSessionID, CreateOwnerID: req.OwnerSessionID, Acceptance: req.Acceptance, CreateAcceptance: &req.Acceptance, ReviewerSessionID: req.ReviewerSessionID, CreateReviewerID: req.ReviewerSessionID, ProjectIDs: projectIDs, CreateProjectIDs: slices.Clone(projectIDs), Labels: labels, CreateLabels: append([]string{}, labels...), SessionIDs: req.SessionIDs,
 		CreateSessionIDs: append([]string{}, req.SessionIDs...), DependsOn: req.DependsOn, CreateDependsOn: append([]string{}, req.DependsOn...), WaitingOn: h.workWaitingOnLocked(&sdkWorkItem{DependsOn: req.DependsOn}),
-		ReviewVersion: 1, UIWork: req.UIWork, Plan: slices.Clone(req.Plan), CreatePlan: slices.Clone(req.Plan), PlanProtocol: strings.TrimSpace(req.PlanProtocol), CreatePlanProtocol: strings.TrimSpace(req.PlanProtocol), Revision: 1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
+		ReviewVersion: 1, GitHubSource: req.GitHubSource, UIWork: req.UIWork, Plan: slices.Clone(req.Plan), CreatePlan: slices.Clone(req.Plan), PlanProtocol: strings.TrimSpace(req.PlanProtocol), CreatePlanProtocol: strings.TrimSpace(req.PlanProtocol), Revision: 1, CreatedAt: now, UpdatedAt: now, Updates: []sdkWorkUpdate{}}
 	if len(req.Plan) > 0 {
 		item.PlanRevision = 1
 	}

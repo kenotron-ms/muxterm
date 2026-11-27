@@ -71,6 +71,10 @@ func agentChatPathAllowed(method, path string) bool {
 		}
 		return len(parts) == 3 && parts[0] != "" && parts[1] == "runs" && parts[2] != "" && method == http.MethodGet
 	}
+	if strings.HasPrefix(path, "/api/work-github-sync/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/work-github-sync/"), "/")
+		return method == http.MethodPost && len(parts) == 2 && parts[0] != "" && parts[1] != ""
+	}
 	if path == "/api/sdk-work/graph" {
 		return method == http.MethodPost
 	}

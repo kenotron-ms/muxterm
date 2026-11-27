@@ -156,6 +156,7 @@ type Server struct {
 
 	sdkChats              *sdkChatHost
 	workWake              chan struct{}
+	workGitHubMu          sync.Mutex
 	pagesMu               sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
 	sdkChatAttachments    *chatattachments.Store
 	sdkJobs               *sdkJobs
@@ -457,6 +458,8 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-work/next", protect(http.HandlerFunc(s.handleSDKNextWork)))
 	s.mux.Handle("POST /api/sdk-work/graph", protect(http.HandlerFunc(s.handleSDKWorkGraph)))
 	s.mux.Handle("POST /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
+	s.mux.Handle("POST /api/sdk-work/{id}/github-publish", protect(http.HandlerFunc(s.handleWorkGitHubPublish)))
+	s.mux.Handle("POST /api/sdk-work/{id}/github-result", protect(http.HandlerFunc(s.handleWorkGitHubResult)))
 	s.mux.Handle("GET /api/sdk-work/{id}", protect(http.HandlerFunc(s.handleSDKWorkItem)))
 	s.mux.Handle("POST /api/sdk-work/{id}/goal-replace", protect(http.HandlerFunc(s.handleSDKWorkGoalReplace)))
 	s.mux.Handle("POST /api/sdk-work/{id}/start", protect(http.HandlerFunc(s.handleSDKWorkStart)))

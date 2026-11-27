@@ -17,14 +17,15 @@ import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextArea } from '../ui/text-area.js';
 import type { MuxUITextField } from '../ui/text-field.js';
 
-type GitHubIncomingIssue = {number:number; title:string; assignees:{login:string}[]};
+type GitHubIncomingIssue = {id:number; number:number; title:string; body:string | null; assignees:{login:string}[]};
 type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; sessionId?: string };
 type WorkDispatch = { clientRef: string; sessionId: string; state: string; detail?: string; selectionReason?: string; choiceSource?: string; goalMode?: 'native' | 'muxterm-work'; contextWorkId?: string; fallback?: string; configuration?: { harness: string; provider: string; bundle?: string; model?: string; effort?: string } };
 type WorkStep = { id: string; title: string; status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped' };
 type WorkCompletion = {reason: string; resolutions?: {id: string; status: string; reason: string}[]; reviewedUnreadComments?: boolean};
 type WorkUpdate = { completion?: WorkCompletion; id: string; at: string; actor?: WorkActor; sessionId?: string; linkedSessionId?: string; summary?: string; text: string; harness?: string; comment?: boolean; commentPriority?: 'normal' | 'high'; commentSource?: string; commentReadThrough?: string; commentNoticeState?: string; title?: string; brief?: string; acceptanceCriteria?: string; goalCondition?: string; goalApproved?: boolean; status?: string; readiness?: string; progress?: string; nextAction?: string; outcome?: string; evidence?: string[]; ownerSessionId?: string; blockedReason?: string; needsHuman?: boolean; planBefore?: WorkStep[]; planAfter?: WorkStep[]; planReason?: string; stepUpdates?: {id:string;status:WorkStep['status']}[] };
 type WorkChatGoal = { requestedRevision:number; appliedRevision:number; controlVersion:number; state:string; humanPaused:boolean; receipts:{id:string; action:string; status:string; detail?:string}[] };
-type WorkItem = { id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalReplacement?: { clientRef:string; condition:string; workRevision:number; controlVersion:number }; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphId?: string; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
+type GitHubWorkSource = {id:number; owner:string; repo:string; number:number};
+type WorkItem = { githubSource?: GitHubWorkSource; githubResultUrl?: string; id: string; reference?: string; title: string; brief: string; harness?: string; source?: string; status: string; readiness?: string; heldByHuman?: boolean; needsHuman?: boolean; progress?: string; nextAction?: string; outcome?: string; createdBy: WorkActor; ownerSessionId: string; reviewerSessionId?: string; acceptanceCriteria?: string; goalCondition?: string; goalRevision?: number; goalFiledRevision?: number; goalReplacement?: { clientRef:string; condition:string; workRevision:number; controlVersion:number }; goalObservation?: { eventId:string; state:string; summary?:string; at:string }; goalApprovedRevision?: number; blockedReason?: string; plan?: WorkStep[]; planRevision?: number; planProtocol?: string; dependsOn: string[]; waitingOn: string[]; graphId?: string; graphIntegrationId?: string; graphLinks?: string[]; labels: string[]; dispatch?: WorkDispatch; commentReadBy?: Record<string,string>; commentNotice?: {ownerSessionId:string; anchorId:string; state:string}; commentBoundary?: {ownerSessionId:string; anchorId:string; state:string}; revision: number; sessionIds: string[]; projectIds: string[]; updatedAt: string; createdAt: string; updates?: WorkUpdate[] };
 type WorkControl = { projectId: string; paused: boolean; parallelism: number; version: number; active: number };
 type DetailTab = 'description' | 'people' | 'plan' | 'activity';
 const detailTabs: { id: DetailTab; label: string; icon: 'description' | 'ownership' | 'plan' | 'clock' }[] = [
@@ -82,6 +83,7 @@ export class MuxChatCoordination extends LitElement {
   @state() private dependencyReferences: Record<string,WorkItem> = {};
   private loadingDependencies = new Set<string>();
   @state() private control?: WorkControl;
+  @state() private workTab: 'local' | 'github' = 'local';
   @state() private filter: 'open' | 'all' | 'finished' = 'open';
   @state() private labelFilter = '';
   @state() private collapsed: Record<string, boolean> = {};
@@ -219,6 +221,9 @@ export class MuxChatCoordination extends LitElement {
     a { color:var(--ui-accent); text-decoration:underline; text-underline-offset:var(--ui-space-2); }
     a[href^='#chat='],.work-dependency-reference { -webkit-user-select:none; user-select:none; }
     .tags { display:flex; flex-wrap:wrap; gap:var(--ui-space-4); margin-top:var(--ui-space-4); }
+    .row .card-label::part(button), .attention .card-label::part(button) {
+      padding:var(--ui-space-2) var(--ui-space-4);
+    }
     .tag { display:inline-flex; border-radius:var(--ui-radius-md); padding:var(--ui-space-2) var(--ui-space-5); background:var(--ui-surface-raised); color:var(--ui-text); font-size:var(--ui-text-md); font-weight:600; }
     .timeline { position:relative; list-style:none; margin:var(--ui-space-6) 0 0; padding:0; }
     .timeline:before { content:''; position:absolute; left:var(--ui-space-5); top:var(--ui-space-6); bottom:var(--ui-space-8); width:var(--ui-space-px); background:var(--ui-border); }
@@ -671,10 +676,16 @@ export class MuxChatCoordination extends LitElement {
     `;
   }
   private controls() { const control = this.control; return html`<div class="controls"><div class="controls-main"><mux-ui-button class="play" icon-only variant="secondary" ?disabled=${!control} accessible-label=${control?.paused ? 'Continue project work' : 'Pause project work'} title=${control?.paused ? 'Continue project work' : 'Pause project work'} @click=${() => void this.changeControl({paused: !control?.paused})}>${icon(control?.paused ? 'play' : 'pause')}</mux-ui-button><span class="active-count">${control?.active ?? 0} in motion${control?.paused ? ' · paused' : ''}</span></div><div class="parallel"><mux-ui-range-field label="Parallel" accessible-label="Parallel work in this project" .min=${1} .max=${8} .value=${control?.parallelism ?? 4} .valueLabels=${["1 at once", "2 at once", "3 at once", "4 at once", "5 at once", "6 at once", "7 at once", "8 at once"]} ?disabled=${!control} @change=${(event: Event) => void this.changeControl({parallelism: (event.target as MuxUIRangeField).value})}></mux-ui-range-field></div></div>`; }
+  private cardLabels(item: WorkItem) {
+    return item.labels?.length ? html`<div class="tags">${item.labels.map(label => html`
+      <mux-ui-button class="card-label" variant="secondary" size="small" ?selected=${this.labelFilter === label}
+        @click=${() => { this.labelFilter = this.labelFilter === label ? '' : label; }}>${label}</mux-ui-button>
+    `)}</div>` : nothing;
+  }
   private group(title: string, key: string, items: WorkItem[]) {
     if (!items.length) return nothing;
     const open = !this.collapsed[key];
-    return html`<section class="group"><mux-ui-button class="group-head" variant="quiet" expandable ?expanded=${open} @click=${() => { this.collapsed = {...this.collapsed, [key]: open}; }}><span class="chevron">${icon('chevron')}</span>${title}<span class="count">${items.length}</span></mux-ui-button>${open ? html`<div class="group-body">${items.map(item => html`<div class="row"><span class=${`kind ${item.status === 'blocked' ? 'blocked' : item.waitingOn?.length ? 'waiting' : key === 'motion' ? 'working' : key === 'ready' ? 'ready' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" accessible-label=${`Open ${item.reference || 'Work item'}: ${item.title}`} @click=${() => this.openDetail(item)}>${item.reference ? html`<span class="work-reference">${item.reference}</span>` : nothing}<strong>${item.title}</strong></mux-ui-button><p>${this.summary(item)}</p>${item.ownerSessionId ? html`<div class="meta">With ${this.chatLink(item.ownerSessionId)}</div>` : nothing}</div>`)}</div>` : nothing}</section>`;
+    return html`<section class="group"><mux-ui-button class="group-head" variant="quiet" expandable ?expanded=${open} @click=${() => { this.collapsed = {...this.collapsed, [key]: open}; }}><span class="chevron">${icon('chevron')}</span>${title}<span class="count">${items.length}</span></mux-ui-button>${open ? html`<div class="group-body">${items.map(item => html`<div class="row"><span class=${`kind ${item.status === 'blocked' ? 'blocked' : item.waitingOn?.length ? 'waiting' : key === 'motion' ? 'working' : key === 'ready' ? 'ready' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" accessible-label=${`Open ${item.reference || 'Work item'}: ${item.title}`} @click=${() => this.openDetail(item)}>${item.reference ? html`<span class="work-reference">${item.reference}</span>` : nothing}<strong>${item.title}</strong></mux-ui-button><p>${this.summary(item)}</p>${this.cardLabels(item)}${item.ownerSessionId ? html`<div class="meta">With ${this.chatLink(item.ownerSessionId)}</div>` : nothing}</div>`)}</div>` : nothing}</section>`;
   }
   private list() {
     const labels = [...new Set(this.work.flatMap(item => item.labels || []))].sort();
@@ -685,7 +696,7 @@ export class MuxChatCoordination extends LitElement {
     const ready = other.filter(item => item.status === 'open' && item.readiness === 'ready' && this.goalReady(item) && !item.waitingOn?.length && !item.ownerSessionId && !item.dispatch);
     const waiting = other.filter(item => !motion.includes(item) && !ready.includes(item) && item.status !== 'done' && item.status !== 'cancelled');
     const finished = other.filter(item => item.status === 'done' || item.status === 'cancelled');
-    return html`<nav class="filters" aria-label="Work filter">${(['open','all','finished'] as const).map(filter => html`<mux-ui-button class="filter" variant="quiet" size="small" ?selected=${this.filter === filter} @click=${() => { this.filter = filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Finished'}</mux-ui-button>`)}${labels.length ? html`<mux-ui-select class="label-filter" size="small" aria-label="Filter by label" .value=${this.labelFilter} .options=${[{value:"",label:"All labels"},...labels.map(label => ({value:label,label}))]} @change=${(event: Event) => { this.labelFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>` : nothing}</nav>${this.controls()}${attention.length ? html`<section class="attention" aria-label="Needs your attention">${attention.map(item => html`<div class="attention-item"><span class=${`kind ${item.status === 'review' ? 'review' : item.status === 'blocked' ? 'blocked' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" accessible-label=${`Open ${item.reference || 'Work item'}: ${item.title}`} @click=${() => this.openDetail(item)}>${item.reference ? html`<span class="work-reference">${item.reference}</span>` : nothing}<h3>${item.title}</h3></mux-ui-button><p>${this.summary(item)}</p></div>`)}</section>` : nothing}${this.group('In motion','motion',motion)}${this.group('Ready to start','ready',ready)}${this.group('Waiting & blocked','waiting',waiting)}${this.group('Finished','finished',finished)}${!selected.length ? html`<div class="empty"><strong>${this.work.length ? 'Nothing in this view' : 'No work here yet'}</strong><p>${this.work.length ? 'Try another filter.' : 'Ask a chat to capture an item for this project.'}</p></div>` : nothing}`;
+    return html`<nav class="filters" aria-label="Work filter">${(['open','all','finished'] as const).map(filter => html`<mux-ui-button class="filter" variant="quiet" size="small" ?selected=${this.filter === filter} @click=${() => { this.filter = filter; }}>${filter === 'open' ? 'Open' : filter === 'all' ? 'All' : 'Finished'}</mux-ui-button>`)}${labels.length ? html`<mux-ui-select class="label-filter" size="small" aria-label="Filter by label" .value=${this.labelFilter} .options=${[{value:"",label:"All labels"},...labels.map(label => ({value:label,label}))]} @change=${(event: Event) => { this.labelFilter = (event.target as MuxUISelect).value; }}></mux-ui-select>` : nothing}</nav>${this.controls()}${attention.length ? html`<section class="attention" aria-label="Needs your attention">${attention.map(item => html`<div class="attention-item"><span class=${`kind ${item.status === 'review' ? 'review' : item.status === 'blocked' ? 'blocked' : ''}`}>${icon(this.statusIcon(item))}${this.status(item)}</span><mux-ui-button variant="quiet" accessible-label=${`Open ${item.reference || 'Work item'}: ${item.title}`} @click=${() => this.openDetail(item)}>${item.reference ? html`<span class="work-reference">${item.reference}</span>` : nothing}<h3>${item.title}</h3></mux-ui-button><p>${this.summary(item)}</p>${this.cardLabels(item)}</div>`)}</section>` : nothing}${this.group('In motion','motion',motion)}${this.group('Ready to start','ready',ready)}${this.group('Waiting & blocked','waiting',waiting)}${this.group('Finished','finished',finished)}${!selected.length ? html`<div class="empty"><strong>${this.work.length ? 'Nothing in this view' : 'No work here yet'}</strong><p>${this.work.length ? 'Try another filter.' : 'Ask a chat to capture an item for this project.'}</p></div>` : nothing}`;
   }
   @state() private completionItem?: WorkItem;
   @state() private completionError = '';
@@ -855,6 +866,7 @@ export class MuxChatCoordination extends LitElement {
       ${tab === 'description' ? html`
         ${item.goalObservation ? html`<p>Last observed chat goal: ${item.goalObservation.state}${item.goalObservation.summary ? html` · ${item.goalObservation.summary}` : nothing}</p>` : nothing}
         ${this.renderWorkChatGoal(item)}
+        ${this.githubPublication(item)}
         <mux-work-goal-review .item=${item} .remoteHost=${this.remoteHost} @work-goal-updated=${(event:CustomEvent<WorkItem>) => { this.detail=event.detail; void this.refresh(); }}></mux-work-goal-review>
         ${item.outcome ? html`<section class="section"><h3>Outcome</h3><p>${item.outcome}</p></section>` : nothing}
         ${item.source ? html`<section class="section"><h3>Origin</h3><p>${item.source}</p></section>` : nothing}
@@ -876,6 +888,59 @@ export class MuxChatCoordination extends LitElement {
       </div>
     </article>`;
   }
+  @state() private githubPublishing = false;
+  @state() private githubPublishError = '';
+  @state() private githubPublishFor = '';
+
+  private async publishGitHub(item: WorkItem, result: boolean) {
+    if (this.githubPublishing) return;
+    const repository = this.renderRoot.querySelector<MuxUITextField>('.github-publish-repo')?.liveValue.trim() ?? '';
+    const [owner, repo] = repository.split('/');
+    const assignee = this.renderRoot.querySelector<MuxUITextField>('.github-publish-assignee')?.liveValue.trim() ?? '';
+    this.githubPublishFor = item.id;
+    this.githubPublishError = '';
+    if (!result && !/^[a-z0-9_.-]{1,100}\/[a-z0-9_.-]{1,100}$/i.test(repository)) {
+      this.githubPublishError = 'Enter a GitHub repository as owner/repo.';
+      return;
+    }
+    this.githubPublishing = true;
+    try {
+      const updated = await this.request<WorkItem>(`/api/sdk-work/${encodeURIComponent(item.id)}/github-${result ? 'result' : 'publish'}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({owner, repo, assignee}),
+      });
+      if (this.detail?.id === item.id) this.detail = updated;
+      void this.refresh();
+    } catch (error) {
+      this.githubPublishError = (error as Error).message;
+    } finally {
+      this.githubPublishing = false;
+    }
+  }
+
+  private githubPublication(item: WorkItem) {
+    if (this.remoteHost) return nothing;
+    const source = item.githubSource;
+    return html`<section class="section github-sync" aria-label="GitHub publication">
+      <h3>GitHub</h3>
+      ${source ? html`
+        <p><a target="_blank" rel="noopener noreferrer" href=${`https://github.com/${source.owner}/${source.repo}/issues/${source.number}`}>${source.owner}/${source.repo}#${source.number}</a></p>
+        ${item.githubResultUrl ? html`<p><a target="_blank" rel="noopener noreferrer" href=${item.githubResultUrl}>View published result</a></p>`
+          : item.status === 'done' ? html`<mux-ui-button variant="secondary" ?disabled=${this.githubPublishing}
+              @click=${() => void this.publishGitHub(item, true)}>Publish result</mux-ui-button>` : nothing}
+      ` : html`
+        <form @submit=${(event:SubmitEvent) => { event.preventDefault(); void this.publishGitHub(item, false); }}>
+          <mux-ui-text-field class="github-publish-repo" label="GitHub repository" placeholder="owner/repo" .value=${this.githubRepo} ?disabled=${this.githubPublishing}></mux-ui-text-field>
+          <mux-ui-text-field class="github-publish-assignee" label="Assignee (optional)" placeholder="GitHub username" ?disabled=${this.githubPublishing}></mux-ui-text-field>
+          <mux-ui-button variant="secondary" type="submit" ?disabled=${this.githubPublishing}
+            @click=${(event:Event) => { event.preventDefault(); void this.publishGitHub(item, false); }}>Publish issue</mux-ui-button>
+        </form>
+      `}
+      ${this.githubPublishFor === item.id && this.githubPublishError ? html`<p role="alert">${this.githubPublishError}</p>` : nothing}
+    </section>`;
+  }
+
   @state() private githubRepo = '';
   @state() private githubIssues?: GitHubIncomingIssue[];
   @state() private githubError = '';
@@ -907,7 +972,7 @@ export class MuxChatCoordination extends LitElement {
   }
 
   private githubInbox() {
-    return html`<section class="section github-sync" aria-label="Incoming GitHub issues">
+    return html`<section class="section github-sync" aria-label="GitHub issues">
       <form @submit=${(event:SubmitEvent) => { event.preventDefault(); void this.syncGitHub(); }}>
         <mux-ui-text-field class="github-repo" label="GitHub repository" aria-label="GitHub repository" placeholder="owner/repo" .value=${this.githubRepo}
           ?disabled=${this.githubSyncing} @input=${(event:Event) => {
@@ -925,16 +990,72 @@ export class MuxChatCoordination extends LitElement {
         </mux-ui-button>
       </form>
       ${this.githubError ? html`<p role="alert">${this.githubError}</p>` : nothing}
-      ${this.githubIssues ? html`<h3>Incoming</h3>
-        ${this.githubIssues.length ? html`<ul>${this.githubIssues.map(issue => html`<li>
-          <a target="_blank" rel="noopener noreferrer" href=${`https://github.com/${this.githubRepo.split('/').map(encodeURIComponent).join('/')}/issues/${issue.number}`}>
-            #${issue.number} ${issue.title}
-          </a> <small>${issue.assignees.map(a => a.login).join(', ')}</small>
-        </li>`)}</ul>` : html`<p>No assigned issues labeled muxterm:work.</p>`}
+      ${this.githubIssues ? html`
+        ${this.githubIssueGroup('Available', this.githubIssues.filter(issue => !issue.assignees.length))}
+        ${this.githubIssueGroup('Assigned to you', this.githubIssues.filter(issue => issue.assignees.length))}
       ` : nothing}
     </section>`;
   }
+  @state() private githubStarting?: number;
+
+  private githubWorkTitle(title: string) {
+    const bytes = new TextEncoder().encode(title);
+    return bytes.length <= 200 ? title : new TextDecoder().decode(bytes.slice(0, 197)).replace(/�$/, '') + '…';
+  }
+
+  private async startGitHubIssue(issue: GitHubIncomingIssue) {
+    if (this.githubStarting !== undefined || !this.projectId) return;
+    const key = this.refreshKey;
+    const [owner, repo] = this.githubRepo.trim().split('/');
+    const source = `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+    this.githubStarting = issue.id;
+    this.githubError = '';
+    try {
+      const item = await this.request<WorkItem>('/api/sdk-work', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          clientRef: `github:${issue.id}:${this.projectId}`,
+          title: this.githubWorkTitle(issue.title),
+          brief: [...(issue.body || issue.title)].slice(0, 8000).join(''),
+          goalCondition: `## Outcome\nComplete the requested task in ${source} and record the verification results in Work.\n\n## Scope\nUse the issue's stated acceptance criteria and leave issue closure to the user. If blocked, record the blocker with evidence and stop.`,
+          projectIds: [this.projectId],
+          labels: ['muxterm:work'],
+          githubSource: {id: issue.id, owner, repo, number: issue.number},
+        }),
+      });
+      if (key !== this.refreshKey) return;
+      void this.refresh();
+      this.openDetail(item);
+    } catch (error) {
+      if (key === this.refreshKey) this.githubError = (error as Error).message;
+    } finally {
+      this.githubStarting = undefined;
+    }
+  }
+
+  private githubIssueGroup(title: string, issues: GitHubIncomingIssue[]) {
+    const repository = this.githubRepo.trim().split('/').map(encodeURIComponent).join('/');
+    return html`<h3>${title}</h3>
+      ${issues.length ? html`<ul>${issues.map(issue => html`<li>
+        <a target="_blank" rel="noopener noreferrer" href=${`https://github.com/${repository}/issues/${issue.number}`}>
+          #${issue.number} ${issue.title}
+        </a> <small>${issue.assignees.map(assignee => assignee.login).join(', ')}</small>
+        <mux-ui-button variant="secondary" size="small" ?disabled=${this.githubStarting !== undefined}
+          @click=${() => void this.startGitHubIssue(issue)}>${this.githubStarting === issue.id ? 'Starting…' : 'Start work'}</mux-ui-button>
+      </li>`)}</ul>` : html`<p>No matching issues.</p>`}`;
+  }
+
+  private workNavigation() {
+    if (this.remoteHost) return this.list();
+    return html`<nav class="filters" aria-label="Work views">
+      <mux-ui-button variant="quiet" ?selected=${this.workTab === 'local'} @click=${() => { this.workTab = 'local'; }}>Local work</mux-ui-button>
+      <mux-ui-button variant="quiet" ?selected=${this.workTab === 'github'} @click=${() => { this.workTab = 'github'; }}>GitHub issues</mux-ui-button>
+    </nav>
+    ${this.workTab === 'github' ? this.githubInbox() : this.list()}`;
+  }
+
   override render() {
-    return html`<div class=${this.detail ? 'wrap detail-wrap' : 'wrap'}><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? html`${!this.remoteHost ? this.githubInbox() : nothing}${this.list()}` : nothing}</div>`;
+    return html`<div class=${this.detail ? 'wrap detail-wrap' : 'wrap'}><div class="top"><div>${this.detail ? nothing : html`<h2>Work</h2><div class="project">${icon('folder')}${this.projectName()}</div>`}</div></div>${!this.projectId && !this.detail ? html`<div class="empty"><strong>Choose a project to see its work.</strong></div>` : this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}${this.detail ? this.detailView() : this.projectId ? this.workNavigation() : nothing}</div>`;
   }
 }
