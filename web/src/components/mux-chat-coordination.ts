@@ -15,6 +15,7 @@ import './work-goal-review.js';
 import type { MuxUIRangeField } from '../ui/range-field.js';
 import type { MuxUISelect } from '../ui/select.js';
 import type { MuxUITextArea } from '../ui/text-area.js';
+import type { MuxUITextField } from '../ui/text-field.js';
 
 type GitHubIncomingIssue = {number:number; title:string; assignees:{login:string}[]};
 type WorkActor = { kind: 'chat' | 'remote-chat' | 'human' | 'external-tool'; sessionId?: string };
@@ -902,12 +903,16 @@ export class MuxChatCoordination extends LitElement {
   private githubInbox() {
     return html`<section class="section" aria-label="Incoming GitHub issues">
       <form @submit=${(event:SubmitEvent) => { event.preventDefault(); void this.syncGitHub(); }}>
-        <label>GitHub repository <input placeholder="owner/repo" .value=${this.githubRepo}
+        <mux-ui-text-field label="GitHub repository" placeholder="owner/repo" .value=${this.githubRepo}
           ?disabled=${this.githubSyncing} @input=${(event:Event) => {
-            this.githubRepo = (event.target as HTMLInputElement).value;
+            this.githubRepo = (event.target as MuxUITextField).value;
             this.githubIssues = undefined;
             this.githubError = '';
-          }}></label>
+          }} @keydown=${(event:KeyboardEvent) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            void this.syncGitHub();
+          }}></mux-ui-text-field>
         <mux-ui-button type="submit" ?disabled=${this.githubSyncing}
           @click=${(event:Event) => { event.preventDefault(); void this.syncGitHub(); }}>
           ${this.githubSyncing ? 'Syncing…' : this.githubRepo.trim() ? `Sync from ${this.githubRepo.trim()}` : 'Sync issues'}
