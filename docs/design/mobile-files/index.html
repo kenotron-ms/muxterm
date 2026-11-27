@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mobile Files concepts</title>
+  <style>
+    :root { color-scheme:dark; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#1b2025; color:#e8edf0; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    button,input { font:inherit; }
+    button { color:inherit; cursor:pointer; }
+    button:focus-visible,input:focus-visible { outline:2px solid #8fcdea; outline-offset:2px; }
+    .app { height:100dvh; min-height:520px; overflow:hidden; display:flex; flex-direction:column; background:#1b2025; }
+    .shell { height:36px; display:flex; align-items:center; gap:9px; padding:0 12px; border-bottom:1px solid #303a42; background:#20262b; font-size:13px; }
+    .shell .mark { color:#99cde6; font-size:18px; line-height:1; }
+    .shell strong { font-weight:630; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .shell .spacer { flex:1; }
+    .shell .quiet { color:#93a0a9; }
+    .bar { min-height:46px; display:flex; align-items:center; gap:7px; padding:4px 10px; border-bottom:1px solid #303a42; }
+    .bar .title { min-width:0; flex:1; font-size:14px; font-weight:660; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .bar .path { display:block; font-size:10px; font-weight:450; color:#97a5ad; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .icon { min-width:34px; height:34px; padding:0 7px; border:0; border-radius:7px; background:transparent; color:#bac7cf; display:inline-flex; align-items:center; justify-content:center; font-size:19px; line-height:1; }
+    .icon:hover,.icon.active { background:#2b3740; color:#f1f5f7; }
+    .word { border:1px solid #40515c; border-radius:7px; background:#28343d; color:#e8edf0; padding:7px 10px; font-size:12px; font-weight:600; white-space:nowrap; }
+    .main { flex:1; min-height:0; position:relative; overflow:hidden; }
+    .scroll { height:100%; overflow:auto; }
+    .browse { height:100%; display:flex; flex-direction:column; }
+    .browse-tools { padding:13px 14px 11px; display:flex; gap:7px; align-items:center; }
+    .search { min-width:0; flex:1; height:36px; background:#252f36; border:1px solid #40515a; border-radius:8px; color:#aebcc5; text-align:left; padding:0 12px; font-size:13px; }
+    .section { padding:11px 15px 7px; color:#a5b1b8; font-size:11px; font-weight:650; }
+    .file-row { width:100%; min-height:49px; display:flex; align-items:center; gap:11px; padding:7px 15px; border:0; border-bottom:1px solid #29343b; background:transparent; text-align:left; }
+    .file-row:active { background:#2d3b45; }
+    .glyph { width:22px; flex:none; color:#8ec8e5; font-size:19px; text-align:center; }
+    .file-row .copy { min-width:0; flex:1; }
+    .file-row strong { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:13px; font-weight:610; }
+    .file-row small { display:block; margin-top:3px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:#91a1aa; font-size:11px; }
+    .chev { color:#82919a; font-size:18px; }
+    .browse-note { margin:auto 17px 14px; color:#81919b; font-size:11px; }
+    .preview { height:100%; display:flex; flex-direction:column; background:#1b2025; }
+    .preview-body { flex:1; min-height:0; overflow:auto; }
+    .document { max-width:620px; margin:0 auto; padding:24px 20px 48px; font-size:15px; line-height:1.58; color:#dbe4e9; overflow-wrap:anywhere; }
+    .document h1 { margin:0 0 16px; font-size:27px; line-height:1.18; letter-spacing:-.025em; color:#f1f5f7; }
+    .document h2 { margin:25px 0 9px; font-size:17px; line-height:1.25; }
+    .document p { margin:0 0 14px; }
+    .document ul { padding-left:19px; margin:0 0 18px; }
+    .document li { margin:6px 0; }
+    .document code { font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; color:#b4d9ed; }
+    .document pre { margin:14px 0; padding:12px; border:1px solid #384750; border-radius:8px; background:#252d33; overflow:auto; }
+    .meta { border-top:1px solid #303a42; color:#99a8b1; display:flex; align-items:center; gap:9px; padding:7px 13px; min-height:30px; font-size:10px; }
+    .meta span:last-child { margin-left:auto; }
+    .html-card { margin:18px 0; min-height:240px; border:1px solid #485760; border-radius:10px; background:#f5f7f8; color:#17212a; padding:20px; box-shadow:0 0 0 5px #242d34; }
+    .html-card h2 { margin:0 0 14px; font-size:23px; }
+    .html-card p { font-size:14px; }
+    .html-card button { border:0; border-radius:6px; background:#24698d; color:white; padding:9px 12px; font-weight:600; }
+    .hint { padding:8px 14px; background:#24313a; color:#b9c9d2; font-size:11px; border-bottom:1px solid #34434c; }
+    .status { margin:20px; padding:21px 18px; border:1px solid #43525b; border-radius:11px; background:#252f36; }
+    .status h2 { margin:0 0 8px; font-size:17px; }
+    .status p { margin:0 0 16px; color:#acbac2; font-size:13px; line-height:1.45; }
+    .status button { border:1px solid #586d79; border-radius:7px; background:#344753; padding:9px 12px; font-size:13px; }
+    .bottom-nav { min-height:50px; padding:6px 10px calc(6px + env(safe-area-inset-bottom)); border-top:1px solid #34434c; background:#20282e; display:flex; gap:8px; }
+    .bottom-nav .word { flex:1; min-height:36px; }
+    .scrim { position:absolute; inset:0; background:rgba(7,12,16,.62); z-index:3; }
+    .sheet { position:absolute; left:0; right:0; bottom:0; z-index:4; border:1px solid #465761; border-bottom:0; border-radius:16px 16px 0 0; background:#27333b; box-shadow:0 -18px 48px #0a0d11a8; max-height:88%; display:flex; flex-direction:column; animation:rise .22s cubic-bezier(.2,.8,.2,1) both; }
+    .grab { width:35px; height:4px; margin:8px auto 6px; border-radius:8px; background:#71838e; }
+    .sheet-head { min-height:44px; display:flex; align-items:center; gap:8px; padding:0 13px 6px; border-bottom:1px solid #40505a; }
+    .sheet-head strong { flex:1; font-size:14px; }
+    .sheet-body { overflow:auto; padding:8px 0 calc(18px + env(safe-area-inset-bottom)); }
+    .sheet input { display:block; width:calc(100% - 24px); height:40px; margin:10px 12px; padding:0 12px; color:#eef3f5; background:#1c252b; border:1px solid #5a6f7b; border-radius:8px; font-size:14px; }
+    .action-row { width:100%; min-height:47px; display:flex; align-items:center; gap:13px; padding:8px 18px; border:0; border-bottom:1px solid #36454d; background:transparent; text-align:left; font-size:13px; }
+    .action-row b { width:20px; font-weight:500; color:#9ad1eb; font-size:18px; text-align:center; }
+    .action-row small { margin-left:auto; color:#96a7b0; }
+    .sheet .file-row { border-bottom-color:#36454d; }
+    .sheet .section { padding-top:5px; }
+    .peek-under { height:100%; }
+    .peek-sheet { max-height:none; height:82%; border-radius:16px 16px 0 0; }
+    .peek-sheet .sheet-head { padding-bottom:5px; }
+    .peek-sheet .preview { min-height:0; flex:1; }
+    .peek-sheet .document { padding-top:19px; }
+    .peek-sheet.expanded { height:calc(100% - 2px); }
+    .peek-label { position:absolute; left:14px; right:14px; top:11px; padding:8px 10px; color:#b7c5cd; font-size:11px; border-radius:7px; background:#27343d; }
+    .demo { position:fixed; z-index:8; right:5px; bottom:3px; opacity:.04; font-size:8px; }
+    .demo:focus,.demo:hover { opacity:1; }
+    @keyframes rise { from { transform:translateY(22px); opacity:.5; } to { transform:translateY(0); opacity:1; } }
+    @media (max-width:350px) { .shell { padding:0 9px; } .bar { padding:4px 7px; } .document { padding:19px 16px 40px; font-size:14px; } .document h1 { font-size:25px; } .word { padding:7px 8px; } }
+    @media (prefers-reduced-motion:reduce) { .sheet { animation:none; } }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const concept = params.get('concept') === 'peek' ? 'peek' : 'focus';
+  const validStates = new Set(['browse','preview','quick','actions','html','error','empty','file-error','html-error']);
+  let state = validStates.has(params.get('state')) ? params.get('state') : 'browse';
+  let path = params.get('path') || (state==='html'||state==='html-error' ? 'docs/preview.html' : 'docs/architecture/mobile-layout.md');
+  let expanded = false;
+  const files = [
+    {name:'docs',path:'docs',folder:true,detail:'Guides and design notes'},
+    {name:'mobile-layout.md',path:'docs/architecture/mobile-layout.md',detail:'docs/architecture · Markdown · 4.8 KB'},
+    {name:'preview.html',path:'docs/preview.html',detail:'docs · HTML · 2.1 KB'},
+    {name:'README.md',path:'README.md',detail:'Project overview · 3.2 KB'},
+    {name:'src',path:'src',folder:true,detail:'Application source'},
+    {name:'package.json',path:'package.json',detail:'Configuration · 1.4 KB'}
+  ];
+  const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fileName = () => path.split('/').pop();
+  function set(next, nextPath) { state=next; if(nextPath) path=nextPath; history.replaceState(null,'',`?concept=${concept}&state=${state}&path=${encodeURIComponent(path)}`); render(); }
+  function row(f) { return `<button class="file-row" data-open="${esc(f.path)}"><span class="glyph">${f.folder?'▱':f.name.endsWith('.html')?'◇':'▤'}</span><span class="copy"><strong>${esc(f.name)}</strong><small>${esc(f.detail)}</small></span><span class="chev">›</span></button>`; }
+  function browser() { return `<div class="browse"><div class="browse-tools"><button class="search" data-next="quick">⌕ &nbsp; Quick Open files</button><button class="icon" data-next="error" aria-label="Refresh folder">↻</button></div><div class="scroll"><div class="section">In this project</div>${row(files[0])}<div class="section">docs / architecture</div>${row(files[1])}${row(files[2])}<div class="section">Project root</div>${files.slice(3).map(row).join('')}<div class="browse-note">Tap a file to preview it. Project files are read only.</div></div></div>`; }
+  function doc() { return path.endsWith('.html') || state==='html' ? `<div class="hint">Static preview · scripts disabled &nbsp; <button class="word" data-next="actions">Run preview</button></div><div class="document"><div class="html-card"><h2>Release notes</h2><p>Version 0.52 brings a simpler mobile Files view and clearer file actions.</p><button>Read the changes</button></div><p>This HTML document runs in a sandboxed preview. Use the action menu to view source or open it elsewhere.</p></div>` : `<article class="document"><h1>Mobile layout</h1><p>Project files should be easy to find and comfortable to read on a phone. The file browser is a navigation tool; the document is the main task once a file opens.</p><h2>Browse and return</h2><p>People move through folders, open a nested file, then return to the same place. Keep the return path visible and preserve the tree position.</p><ul><li>Search across the project with Quick Open.</li><li>Keep file actions within thumb reach.</li><li>Give a preview enough width for prose and code.</li></ul><h2>Preview behavior</h2><p>Markdown reads as a document. HTML opens as a static, sandboxed preview by default. The actions list provides source, download, copy path and refresh.</p><pre><code>const file = "docs/architecture/mobile-layout.md";\nopenPreview(file);</code></pre><p>On a smaller phone, labels remain explicit while secondary metadata recedes.</p></article>`; }
+  function preview() { const body=state==='file-error'||state==='html-error' ? `<div class="status"><h2>${state==='html-error'?'HTML preview unavailable':'File unavailable'}</h2><p>${state==='html-error'?'The preview could not load. View the source or retry the preview.':'This file could not be loaded. Return to files or try again.'}</p><button data-next="${state==='html-error'?'html':'preview'}">Retry preview</button></div>` : doc(); return `<div class="preview"><div class="preview-body">${body}</div><div class="meta"><span>${path.endsWith('.html')?'HTML':'Markdown'}</span><span>Read only</span><span>${path.endsWith('.html')?'2.1 KB':'4.8 KB'}</span></div></div>`; }
+  function heading() { if(state==='browse'||state==='empty'||state==='error'||state==='quick') return `<div class="bar"><span class="title">Files<span class="path">muxterm / project</span></span><button class="icon" data-next="quick" aria-label="Quick Open">⌕</button></div>`; return `<div class="bar"><button class="icon" data-next="browse" aria-label="Back to files">‹</button><span class="title">${esc(fileName())}<span class="path">${esc(path)}</span></span><button class="icon" data-next="actions" aria-label="File actions">⋯</button></div>`; }
+  function actionSheet() { return `<div class="scrim" data-next="preview"></div><div class="sheet"><div class="grab"></div><div class="sheet-head"><strong>${esc(fileName())}</strong><button class="icon" data-next="preview" aria-label="Close actions">×</button></div><div class="sheet-body"><button class="action-row" data-next="preview"><b>◉</b>Ask about file</button><button class="action-row" data-next="preview"><b>⌘</b>View source</button><button class="action-row" data-next="preview"><b>↗</b>Open in browser tab</button><button class="action-row" data-next="preview"><b>⧉</b>Copy file path</button><button class="action-row" data-next="preview"><b>↓</b>Download file</button><button class="action-row" data-next="preview"><b>↻</b>Refresh file</button><button class="action-row" data-next="browse"><b>×</b>Close file</button></div></div>`; }
+  function quickSheet() { return `<div class="scrim" data-next="browse"></div><div class="sheet"><div class="grab"></div><div class="sheet-head"><strong>Quick Open</strong><button class="icon" data-next="browse" aria-label="Close Quick Open">×</button></div><input id="query" placeholder="Search project files" value="docs"><div class="sheet-body"><div class="section">Matching files</div>${row(files[1])}${row(files[2])}<div class="section">Search includes nested folders</div></div></div>`; }
+  function statusPage() { return `<div class="scroll">${state==='error'?`<div class="status"><h2>Folder unavailable</h2><p>The project files could not be loaded. Check the connection, then try again.</p><button data-next="browse">Retry loading files</button></div>`:`<div class="status"><h2>No files in this folder</h2><p>Open another folder or search the whole project by file name.</p><button data-next="quick">Quick Open</button></div>`}</div>`; }
+  function render() {
+    const isPreview = ['preview','html','actions','file-error','html-error'].includes(state);
+    let content;
+    if(concept==='focus') {
+      content = `<div class="app"><div class="shell"><span class="mark">▱</span><strong>Files</strong><span class="spacer"></span><span class="quiet">Project tools</span></div>${heading()}<div class="main">${state==='error'||state==='empty'?statusPage():isPreview?preview():browser()}${state==='quick'?quickSheet():''}${state==='actions'?actionSheet():''}</div>${isPreview?`<div class="bottom-nav"><button class="word" data-next="browse">▱ &nbsp; Browse files</button><button class="word" data-next="quick">⌕ &nbsp; Quick Open</button></div>`:''}</div>`;
+    } else {
+      content = `<div class="app"><div class="shell"><span class="mark">▱</span><strong>Files</strong><span class="spacer"></span><span class="quiet">Project tools</span></div><div class="bar"><span class="title">Project files<span class="path">muxterm / project</span></span><button class="icon" data-next="quick" aria-label="Quick Open">⌕</button></div><div class="main">${state==='error'||state==='empty'?statusPage():browser()}${isPreview?`<div class="scrim" data-next="browse"></div><div class="sheet peek-sheet ${expanded?'expanded':''}"><div class="grab"></div><div class="sheet-head"><button class="icon" data-next="browse" aria-label="Back to files">‹</button><strong>${esc(fileName())}</strong><button class="icon" data-expand aria-label="${expanded?'Minimize preview':'Expand preview'}">${expanded?'⌄':'⤢'}</button><button class="icon" data-next="actions" aria-label="File actions">⋯</button></div>${preview()}</div>`:''}${state==='quick'?quickSheet():''}${state==='actions'?actionSheet():''}</div></div>`;
+    }
+    document.getElementById('app').innerHTML = content;
+    document.querySelectorAll('[data-next]').forEach(el=>el.addEventListener('click',()=>set(el.dataset.next)));
+    document.querySelectorAll('[data-open]').forEach(el=>el.addEventListener('click',()=>set(el.dataset.open.endsWith('.html')?'html':'preview',el.dataset.open)));
+    document.querySelectorAll('[data-expand]').forEach(el=>el.addEventListener('click',()=>{expanded=!expanded;render()}));
+    const query=document.getElementById('query'); if(query) query.addEventListener('input',()=>{document.querySelectorAll('.sheet .file-row').forEach(el=>el.style.display=el.dataset.open.toLowerCase().includes(query.value.toLowerCase())?'':'none')});
+  }
+  render();
+</script>
+</body>
+</html>
