@@ -211,6 +211,7 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			At             time.Time `json:"at"`
 			Type           string    `json:"type"`
 			Text           string    `json:"text"`
+			ItemID         string    `json:"itemId"`
 			Name           string    `json:"name"`
 			ToolID         string    `json:"toolId"`
 			ChildSessionID string    `json:"childSessionId"`
@@ -276,8 +277,9 @@ func (s *Server) handleSDKChatHistory(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if header.Type == "assistant.delta" {
-			if assistant == nil {
-				assistant = &sdkEvent{SessionID: header.SessionID, At: header.At, Type: header.Type}
+			if assistant == nil || assistant.ItemID != header.ItemID {
+				flushAssistant()
+				assistant = &sdkEvent{SessionID: header.SessionID, At: header.At, Type: header.Type, ItemID: header.ItemID}
 			}
 			assistant.Text += header.Text
 			continue
