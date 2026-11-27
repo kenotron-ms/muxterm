@@ -2388,12 +2388,10 @@ export class MuxSDKChat extends LitElement {
     const work = new Map<number, Block[]>();
     const latestInput = new Map<number, number>();
     const latestActiveUser = new Map<number, number>();
-    const segmentedTurns = new Set(visibleBlocks.filter(block => (block.kind === 'question' || block.kind === 'delegate') && this.turnFinished.has(block.turn)).map(block => block.turn));
     const orderedAssistantText = this.chat?.harness === 'opencode';
     const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question' || block.kind === 'delegate';
     for (const block of visibleBlocks) {
-      if (orderedAssistantText) continue;
-      if (!this.turnFinished.has(block.turn)) {
+      if (!orderedAssistantText && !this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') latestActiveUser.set(block.turn, block.key);
         else if (block.kind === 'work-digest') continue;
         else {
@@ -2403,15 +2401,14 @@ export class MuxSDKChat extends LitElement {
         }
         continue;
       }
-      if (block.kind === 'user' || block.kind === 'chat-message') latestInput.set(block.turn, block.key);
-      if (isWork(block) && !segmentedTurns.has(block.turn)) {
+      if (!orderedAssistantText && (block.kind === 'user' || block.kind === 'chat-message')) latestInput.set(block.turn, block.key);
+      if (isWork(block)) {
         const items = work.get(block.turn) || [];
         items.push(block);
         work.set(block.turn, items);
       }
     }
     const shown = new Set<number>();
-    const segmentedWorkShown = new Set<number>();
     const rows: TranscriptRow[] = [];
     for (const block of visibleBlocks) {
       if (!orderedAssistantText && !this.turnFinished.has(block.turn)) {
@@ -2424,16 +2421,6 @@ export class MuxSDKChat extends LitElement {
             rows.push({ key:`work-${block.turn}`, block:items[0], work:items });
           }
         }
-      } else if (orderedAssistantText || segmentedTurns.has(block.turn)) {
-        if (isWork(block)) {
-          const previous = rows.at(-1);
-          if (previous?.work && previous.block.turn === block.turn) previous.work.push(block);
-          else {
-            const key = segmentedWorkShown.has(block.turn) ? `work-${block.turn}-${block.key}` : `work-${block.turn}`;
-            segmentedWorkShown.add(block.turn);
-            rows.push({ key, block, work:[block] });
-          }
-        } else rows.push({ key:`block-${block.key}`, block });
       } else if (isWork(block)) {
         if (shown.has(block.turn) || latestInput.has(block.turn)) continue;
         shown.add(block.turn);
