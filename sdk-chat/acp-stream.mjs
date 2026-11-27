@@ -490,7 +490,10 @@ export class ACPStream {
         this.goalMarkerTail = hold ? visible.slice(-hold) : '';
         messageText = hold ? visible.slice(0, -hold) : visible;
       }
-      if (messageText) this.emit(this.session.id, 'assistant.delta', { text: messageText });
+      if (messageText) this.emit(this.session.id, 'assistant.delta', {
+        text: messageText,
+        itemId: this.session.harness === 'opencode' ? update.messageId : undefined,
+      });
     }
     else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       const id = update.toolCallId;

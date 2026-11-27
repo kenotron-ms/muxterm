@@ -58,7 +58,7 @@ type SDKEvent = { at?: string; complete?: boolean; childSessionId?: string; pare
 type AgentLeg = { task: string; reply: string; status: string };
 type AgentStep = { id: string; name: string; status: string; detail?: unknown };
 type AgentView = { id: string; parentId: string; name: string; status: string; progress: string; legs: AgentLeg[]; steps: AgentStep[]; startedAt?: number; finishedAt?: number };
-type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'work-digest' | 'lane-report' | 'chat-message' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; workId?: string; source?: string; done?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; lightweight?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
+type Block = { key: number; turn: number; kind: 'user' | 'interjection' | 'assistant' | 'commentary' | 'thinking' | 'tool' | 'delegate' | 'progress' | 'error' | 'status' | 'work-digest' | 'lane-report' | 'chat-message' | 'question' | 'voice-input' | 'voice-output'; text: string; at?: string; channel?: 'voice' | 'task'; name?: string; id?: string; workId?: string; source?: string; done?: boolean; toolBoundary?: boolean; input?: unknown; output?: unknown; failed?: boolean; summary?: boolean; lightweight?: boolean; attachments?: DisplayAttachment[]; harness?: string; laneState?: string; relation?: LaneOrigin['relation'] | 'external-tool' };
 type DigestWork = { id:string; reference?:string; title:string; status:string; readiness?:string; needsHuman?:boolean; blockedReason?:string; progress?:string; nextAction?:string; outcome?:string; ownerSessionId?:string; updatedAt?:string; dispatch?:{state:string;detail?:string;sessionId?:string} };
 type DigestEntry = { workId:string; text:string; at:string; count:number; work?:DigestWork; error?:boolean };
 type ToolKind = 'shell' | 'read' | 'search' | 'web' | 'edit' | 'agent' | 'other';
@@ -1743,15 +1743,17 @@ export class MuxSDKChat extends LitElement {
     else if (event.type === 'assistant.delta') {
       markStart(this.currentTurn);
       const last = blocks[blocks.length - 1];
-      if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || ''), at:event.at || last.at };
-      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', at:event.at, text:event.text || '' });
+      const messageId = orderedAssistantText ? event.itemId : undefined;
+      if (last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice' && !last.done && last.id === messageId)
+        blocks[blocks.length - 1] = { ...last, text:last.text + (event.text || ''), at:event.at || last.at };
+      else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'assistant', channel:'task', id:messageId, at:event.at, text:event.text || '' });
     } else if (event.type === 'assistant.interim' && !orderedAssistantText) {
       const last = blocks[blocks.length - 1];
       if (last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
     } else if (event.type === 'work.activity') {
       const last = blocks.at(-1);
       if (orderedAssistantText && event.kind === 'completed' && last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice')
-        blocks[blocks.length - 1] = { ...last, done:true };
+        blocks[blocks.length - 1] = { ...last, done:true, toolBoundary:true };
       // The compact history view knows the tool names and boundaries. Render
       // those rows immediately so opening a chat does not insert them later.
       const index = event.toolId ? blocks.findIndex(block => block.kind === 'tool' && block.turn === this.currentTurn && block.id === event.toolId && block.lightweight) : -1;
@@ -1768,7 +1770,7 @@ export class MuxSDKChat extends LitElement {
       // OpenCode publishes pre-tool prose as assistant messages.
       const last = blocks[blocks.length - 1];
       if (!orderedAssistantText && last?.kind === 'assistant' && last.channel !== 'voice' && !last.done) blocks[blocks.length - 1] = { ...last, kind:'commentary', done:true };
-      const existing = blocks.findIndex(b => b.kind === 'tool' && b.id === event.toolId && !b.done);
+      const existing = blocks.findIndex(b => b.kind === 'tool' && b.turn === this.currentTurn && b.id === event.toolId && !b.done);
       if (existing >= 0) blocks[existing] = { ...blocks[existing], lightweight:false, name:event.name || blocks[existing].name, input:event.raw ?? blocks[existing].input, summary:event.summary || blocks[existing].summary };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:'Running', name:event.name || 'Tool', id:event.toolId, input:event.raw, summary:event.summary });
     }
@@ -1776,8 +1778,8 @@ export class MuxSDKChat extends LitElement {
       markStart(this.currentTurn);
       const last = blocks.at(-1);
       if (orderedAssistantText && last?.kind === 'assistant' && last.turn === this.currentTurn && last.channel !== 'voice')
-        blocks[blocks.length - 1] = { ...last, done:true };
-      let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
+        blocks[blocks.length - 1] = { ...last, done:true, toolBoundary:true };
+      let index = -1; for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].kind === 'tool' && blocks[i].turn === this.currentTurn && blocks[i].id === event.toolId && !blocks[i].done) { index = i; break; }
       if (index >= 0) blocks[index] = { ...blocks[index], done:true, lightweight:false, text:event.failed ? 'Failed' : 'Completed', failed:event.failed, summary:event.summary || blocks[index].summary,
         output:event.raw };
       else blocks.push({ key:++this.nextBlockKey, turn:this.currentTurn, kind:'tool', text:event.failed ? 'Failed' : 'Completed', name:event.name || 'Tool', id:event.toolId, done:true, failed:event.failed, summary:event.summary,
@@ -2336,7 +2338,7 @@ export class MuxSDKChat extends LitElement {
       else {
         flush();
         if (item.kind === 'commentary') steps.push(this.commentaryEntry(item));
-        else if (item.kind === 'assistant') steps.push(html`<div class="text work-assistant" aria-label="Streaming reply">${this.markdown(item, item.key)}</div>`);
+        else if (item.kind === 'assistant') steps.push(html`<div class="text work-assistant" aria-label=${this.chat?.harness === 'opencode' ? 'Progress update' : 'Streaming reply'}>${this.markdown(item, item.key)}</div>`);
         else if (item.kind === 'interjection') steps.push(this.interjectionEntry(item));
         else if (item.kind === 'question') steps.push(this.questionCard(item));
         else if (item.kind === 'delegate') steps.push(this.agentCard(item, agents));
@@ -2389,7 +2391,25 @@ export class MuxSDKChat extends LitElement {
     const latestInput = new Map<number, number>();
     const latestActiveUser = new Map<number, number>();
     const orderedAssistantText = this.chat?.harness === 'opencode';
-    const isWork = (block: Block) => block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question' || block.kind === 'delegate';
+    // Text leading into tool activity belongs beside that activity. Text
+    // after the last tool boundary remains in the transcript as the reply.
+    const activityBoundary = new Map<number, number>();
+    const runningTools = new Set<number>();
+    if (orderedAssistantText) {
+      for (const block of this.blocks) {
+        if (block.kind === 'tool') {
+          activityBoundary.set(block.turn, block.key);
+          if (!block.done) runningTools.add(block.turn);
+        } else if (block.kind === 'assistant' && block.toolBoundary) {
+          activityBoundary.set(block.turn, block.key);
+        }
+      }
+    }
+    const isWork = (block: Block) =>
+      (orderedAssistantText && block.kind === 'assistant' && block.channel !== 'voice' &&
+        (block.key <= (activityBoundary.get(block.turn) ?? -1) ||
+          (!this.turnFinished.has(block.turn) && runningTools.has(block.turn)))) ||
+      block.kind === 'commentary' || block.kind === 'tool' || block.kind === 'progress' || block.kind === 'interjection' || block.kind === 'voice-input' || block.kind === 'voice-output' || block.kind === 'question' || block.kind === 'delegate';
     for (const block of visibleBlocks) {
       if (!orderedAssistantText && !this.turnFinished.has(block.turn)) {
         if (block.kind === 'user') latestActiveUser.set(block.turn, block.key);
