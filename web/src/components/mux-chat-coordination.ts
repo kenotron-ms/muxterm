@@ -878,7 +878,9 @@ export class MuxChatCoordination extends LitElement {
   @state() private githubSyncing = false;
 
   private async syncGitHub() {
-    const repo = this.githubRepo.trim();
+    if (this.githubSyncing) return;
+    const field = this.renderRoot.querySelector<MuxUITextField>('.github-repo');
+    const repo = (field?.liveValue ?? this.githubRepo).trim();
     if (!/^[a-z0-9_.-]{1,100}\/[a-z0-9_.-]{1,100}$/i.test(repo)) {
       this.githubError = 'Enter a GitHub repository as owner/repo.';
       return;
@@ -903,7 +905,7 @@ export class MuxChatCoordination extends LitElement {
   private githubInbox() {
     return html`<section class="section" aria-label="Incoming GitHub issues">
       <form @submit=${(event:SubmitEvent) => { event.preventDefault(); void this.syncGitHub(); }}>
-        <mux-ui-text-field label="GitHub repository" placeholder="owner/repo" .value=${this.githubRepo}
+        <mux-ui-text-field class="github-repo" label="GitHub repository" aria-label="GitHub repository" placeholder="owner/repo" .value=${this.githubRepo}
           ?disabled=${this.githubSyncing} @input=${(event:Event) => {
             this.githubRepo = (event.target as MuxUITextField).value;
             this.githubIssues = undefined;
