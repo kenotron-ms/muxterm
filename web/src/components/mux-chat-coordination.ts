@@ -207,6 +207,10 @@ export class MuxChatCoordination extends LitElement {
     .plan-protocol { margin-top:var(--ui-space-5); color:var(--ui-text-muted); font-size:var(--ui-text-sm); white-space:pre-wrap; }
     mux-work-goal-review { display:block; min-width:0; }
     .section { margin-top:var(--ui-space-9); }
+    .github-sync form { display:grid; grid-template-columns:minmax(0,1fr); justify-items:start; gap:var(--ui-space-3); margin-bottom:var(--ui-space-4); }
+    .github-repo { width:100%; }
+    .github-sync mux-ui-button { max-width:100%; }
+    .github-sync mux-ui-button::part(button) { white-space:normal; overflow-wrap:anywhere; text-align:start; }
     .section h3 { margin-bottom:var(--ui-space-4); }
     .section p { color:var(--ui-text-muted); white-space:pre-wrap; overflow-wrap:anywhere; }
     .facts { display:flex; flex-wrap:wrap; gap:var(--ui-space-5) var(--ui-space-7); margin-top:var(--ui-space-9); color:var(--ui-text-muted); font-size:var(--ui-text-md); }
@@ -903,7 +907,7 @@ export class MuxChatCoordination extends LitElement {
   }
 
   private githubInbox() {
-    return html`<section class="section" aria-label="Incoming GitHub issues">
+    return html`<section class="section github-sync" aria-label="Incoming GitHub issues">
       <form @submit=${(event:SubmitEvent) => { event.preventDefault(); void this.syncGitHub(); }}>
         <mux-ui-text-field class="github-repo" label="GitHub repository" aria-label="GitHub repository" placeholder="owner/repo" .value=${this.githubRepo}
           ?disabled=${this.githubSyncing} @input=${(event:Event) => {
