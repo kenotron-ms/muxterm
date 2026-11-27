@@ -141,6 +141,9 @@ type sdkWorkUpdate struct {
 	DependsOn          *[]string             `json:"dependsOn,omitempty"`
 	ExpectedRevision   *int                  `json:"expectedRevision,omitempty"`
 	JobEvent           *sdkJobWorkEvent      `json:"jobEvent,omitempty"`
+
+	ResultWorkGoalRevision int `json:"resultWorkGoalRevision,omitempty"`
+	ResultChatGoalRevision int `json:"resultChatGoalRevision,omitempty"`
 }
 
 type sdkWorkDispatch struct {
@@ -1537,6 +1540,7 @@ func (s *Server) applySDKWorkUpdate(w http.ResponseWriter, r *http.Request, req 
 		last := &copy.Updates[len(copy.Updates)-1]
 		last.JobEvent = newJobWorkEvent(&copy, last)
 	}
+	h.bindWorkGoalResultLocked(&copy, &copy.Updates[len(copy.Updates)-1])
 	wasReady := item.Readiness == "ready"
 	if err := h.saveWorkLocked(&copy); err != nil {
 		h.mu.Unlock()
