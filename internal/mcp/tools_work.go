@@ -11,6 +11,21 @@ func registerWorkTools(srv *Server) {
 	pt := newPublishTools()
 	stringProp := map[string]any{"type": "string"}
 	stringsProp := map[string]any{"type": "array", "items": stringProp}
+	srv.Register("sync_github_work", "Read open GitHub issues labeled muxterm:work that are unassigned or assigned to a GitHub Connections account. Uses the same sync as the GitHub issues view on this machine.",
+		map[string]any{"type": "object", "properties": map[string]any{"owner": stringProp, "repo": stringProp}, "required": []string{"owner", "repo"}},
+		func(args map[string]any) (string, error) {
+			owner, err := argString(args, "owner")
+			if err != nil {
+				return "", err
+			}
+			repo, err := argString(args, "repo")
+			if err != nil {
+				return "", err
+			}
+			path := "/api/work-github-sync/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
+			result, err := pt.chatRequestForMachine(LocalMachine, http.MethodPost, path, nil)
+			return workToolResult(args, result, err)
+		})
 	stepProp := map[string]any{"type": "object", "properties": map[string]any{"id": stringProp, "title": stringProp, "status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done", "blocked", "skipped"}}}, "required": []string{"id", "title", "status"}}
 	planProp := map[string]any{"type": "array", "items": stepProp}
 	stepUpdateProp := map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": stringProp, "status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done", "blocked", "skipped"}}}, "required": []string{"id", "status"}}}

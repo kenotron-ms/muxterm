@@ -156,6 +156,7 @@ type Server struct {
 
 	sdkChats              *sdkChatHost
 	workWake              chan struct{}
+	workGitHubMu          sync.Mutex
 	pagesMu               sync.Map // chat ID -> *sync.Mutex; page writes never hold the global chat lock
 	sdkChatAttachments    *chatattachments.Store
 	sdkJobs               *sdkJobs
@@ -400,7 +401,6 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/sdk-chats", protect(http.HandlerFunc(s.handleSDKChats)))
 	s.mux.Handle("GET /api/skills", protect(http.HandlerFunc(s.handleSkillsList)))
 	s.mux.Handle("GET /api/connections", protect(http.HandlerFunc(s.handleConnections)))
-	s.mux.Handle("GET /api/rooms/access/{owner}/{repo}", protect(http.HandlerFunc(s.handleRoomsAccess)))
 	s.mux.Handle("GET /api/connections/microsoft", protect(http.HandlerFunc(s.handleMicrosoftGraph)))
 	s.mux.Handle("POST /api/connections/microsoft/{account}/connect", protect(http.HandlerFunc(s.handleMicrosoftGraphConnect)))
 	s.mux.Handle("DELETE /api/connections/microsoft/{account}/connect", protect(http.HandlerFunc(s.handleMicrosoftGraphCancel)))
@@ -454,9 +454,12 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/sdk-chats/{id}/inbox-attention", protect(http.HandlerFunc(s.handleSDKInboxAttention)))
 	s.mux.Handle("POST /api/sdk-chats/{id}/inbox-attention/ack", protect(http.HandlerFunc(s.handleSDKInboxAttentionAck)))
 	s.mux.Handle("GET /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
+	s.mux.Handle("POST /api/work-github-sync/{owner}/{repo}", protect(http.HandlerFunc(s.handleWorkGitHubSync)))
 	s.mux.Handle("GET /api/sdk-work/next", protect(http.HandlerFunc(s.handleSDKNextWork)))
 	s.mux.Handle("POST /api/sdk-work/graph", protect(http.HandlerFunc(s.handleSDKWorkGraph)))
 	s.mux.Handle("POST /api/sdk-work", protect(http.HandlerFunc(s.handleSDKWork)))
+	s.mux.Handle("POST /api/sdk-work/{id}/github-publish", protect(http.HandlerFunc(s.handleWorkGitHubPublish)))
+	s.mux.Handle("POST /api/sdk-work/{id}/github-result", protect(http.HandlerFunc(s.handleWorkGitHubResult)))
 	s.mux.Handle("GET /api/sdk-work/{id}", protect(http.HandlerFunc(s.handleSDKWorkItem)))
 	s.mux.Handle("POST /api/sdk-work/{id}/goal-replace", protect(http.HandlerFunc(s.handleSDKWorkGoalReplace)))
 	s.mux.Handle("POST /api/sdk-work/{id}/start", protect(http.HandlerFunc(s.handleSDKWorkStart)))
