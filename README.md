@@ -1,19 +1,14 @@
-<p align="center">
-  <picture>
-    <source media="(max-width: 640px)" srcset="docs/marketing/workspace-mobile.svg">
-    <img src="docs/marketing/workspace.svg" alt="Muxterm brings terminals, agent chats, and Work into one workspace" width="1200">
-  </picture>
-</p>
-
 # muxterm
 
-**Use the harnesses and subscriptions you already have. Get one inviting place to work, wherever you are.**
+**One workspace for your AI conversations and the tasks you hand off.**
 
-Muxterm brings Codex, Claude Code, and Amplifier sessions together with persistent terminals, files, and trackable Work. Open the same responsive workspace at your desk or on your phone: the status stays clear, and the calm, palette-derived interface leaves room for the task.
+Start a chat with an agent you use, then give separate tasks to other agents as your project grows. Muxterm keeps conversations, project files, and task progress together so you can see what’s running and review what’s ready.
 
-[Get started](#get-started) · [See the workflow](#a-good-first-workflow) · [Explore the features](#what-you-can-do) · [Download a release](https://github.com/kenotron-ms/muxterm/releases/latest)
+[Website](https://kenotron-ms.github.io/muxterm/) · [User guide](https://kenotron-ms.github.io/muxterm/docs/) · [Set up Muxterm](https://kenotron-ms.github.io/muxterm/docs/installation.html)
 
-[Website](https://kenotron-ms.github.io/muxterm/) · [Documentation](https://kenotron-ms.github.io/muxterm/docs/) · [Storybook](https://kenotron-ms.github.io/muxterm/storybook/)
+<p align="center">
+  <img src="docs/marketing/work-digest.png" alt="Muxterm's Work summary showing tasks in progress and items ready for review" width="800">
+</p>
 
 ## Why use muxterm?
 
@@ -50,11 +45,9 @@ See [installation, service mode, and updates](docs/guides/installation-and-updat
 
 ## A good first workflow
 
-1. **Open Terminal** for your shell, editor, or TUI. Split panes when you want tools side by side; Muxterm keeps the PTYs running when the browser goes away.
-2. **Start a chat in a project folder.** Choose the harness and model you already use. Its conversation remains a session you can find again, rather than a terminal pane you must remember.
-3. **File a Work item for an outcome.** Describe what done means. Muxterm records the criteria, chooses an eligible worker session when the item is ready, and shows progress, blockers, and evidence in Work.
-4. **Keep the relevant surfaces nearby.** Browse and preview project files beside the conversation, or schedule a Job for recurring instructions.
-5. **Pick up from another screen.** Once you have configured a reachable home Muxterm URL, open it on your phone or another computer to inspect the session and its next action.
+1. **Start a chat in a project folder.** Choose an agent and ask it to help you plan a small project.
+2. **Hand off a task.** Ask the chat to draft a Work item. Review what the worker will deliver and start it when you’re ready.
+3. **Check the result.** Use Work to see who’s working on what and which tasks need your review. Open the worker’s chat or browse the project files to see the details.
 
 | When you want to… | Use |
 | --- | --- |
@@ -75,11 +68,6 @@ See [installation, service mode, and updates](docs/guides/installation-and-updat
 **Move between machines.** A home Muxterm URL can connect to projects and agent sessions on SSH machines while their files, processes, and sign-ins stay there. [Set up remote projects](docs/guides/remote-projects-and-chats.md).
 
 **Connect your other tools.** `muxterm mcp` exposes workspace, terminal, file, and other controls to MCP-compatible agents. The macOS app also has a local browser pane that agents can inspect and operate through its native MCP tool. [See agent integration and permission boundaries](docs/guides/agent-integration.md).
-
-<p align="center">
-  <img src="docs/marketing/work-digest.png" alt="Browser capture of a Work digest with current status and next actions for four items" width="800">
-</p>
-<p align="center"><em>Work status stays visible in the conversation; details live in the Work view.</em></p>
 
 <details>
 <summary>See Terminal and Files side by side</summary>
@@ -105,5 +93,7 @@ Muxterm is self-hosted. The server handles the web UI, authentication, and chat 
 ## Build and contribute
 
 From source, `make build` produces the embedded web UI and Go binary. For isolated local development use `make dev-local`; it serves on `127.0.0.1:8313`. See [development setup](docs/guides/installation-and-updates.md#development) and read [AGENTS.md](AGENTS.md) before running verification on a machine with Muxterm installed.
+
+[Storybook](https://kenotron-ms.github.io/muxterm/storybook/) documents the interface components for contributors.
 
 Muxterm is [MIT licensed](LICENSE).

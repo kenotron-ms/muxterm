@@ -5,9 +5,16 @@ import { Marked } from 'marked';
 const root = new URL('../../', import.meta.url);
 const repository = 'https://github.com/kenotron-ms/muxterm';
 const pages = new Map([
-  ['docs/README.md', 'docs/index.html'],
-  ['docs/guides/installation-and-updates.md', 'docs/installation.html'],
-  ['docs/guides/remote-projects-and-chats.md', 'docs/remote-projects.html'],
+  ['docs/user/README.md', 'docs/index.html'],
+  ['docs/user/installation.md', 'docs/installation.html'],
+  ['docs/user/remote-projects.md', 'docs/remote-projects.html'],
+  ['docs/user/first-chat.md', 'docs/first-chat.html'],
+  ['docs/user/work.md', 'docs/work.html'],
+]);
+
+const images = new Map([
+  ['docs/marketing/work-digest.png', 'assets/work-digest.png'],
+  ['site/assets/workspace-phone.webp', 'assets/workspace-phone.webp'],
 ]);
 
 for (const [source, output] of pages) {
@@ -19,6 +26,13 @@ for (const [source, output] of pages) {
 
   const parser = new Marked({
     renderer: {
+      image(token) {
+        const asset = images.get(path.join(path.dirname(source), token.href));
+        if (asset) {
+          token.href = path.relative(path.dirname(output), asset);
+        }
+        return false;
+      },
       link(token) {
         if (!/^(?:[a-z][a-z\d+.-]*:|\/|#)/i.test(token.href)) {
           const [pathname, fragment = ''] = token.href.split(/(?=#)/, 2);
@@ -50,8 +64,8 @@ for (const [source, output] of pages) {
   <header class="site-header docs-header">
     <a class="brand" href="../"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>muxterm</a>
     <nav aria-label="Main navigation">
-      <a href="./"${output === 'docs/index.html' ? ' aria-current="page"' : ''}>Docs</a>
-      <a href="../storybook/">Storybook</a>
+      <a href="./"${output === 'docs/index.html' ? ' aria-current="page"' : ''}>User guide</a>
+      <a href="installation.html">Setup</a>
     </nav>
   </header>
   <main class="docs-content shell" id="main">
