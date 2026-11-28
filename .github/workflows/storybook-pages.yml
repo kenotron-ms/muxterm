@@ -8,9 +8,8 @@ on:
       - 'web/**'
       - 'site/**'
       - 'docs/design-system/**'
-      - 'docs/README.md'
-      - 'docs/guides/installation-and-updates.md'
-      - 'docs/guides/remote-projects-and-chats.md'
+      - 'docs/user/**'
+      - 'docs/marketing/work-digest.png'
       - 'README.md'
       - '.github/workflows/storybook-pages.yml'
   pull_request:
@@ -18,9 +17,8 @@ on:
       - 'web/**'
       - 'site/**'
       - 'docs/design-system/**'
-      - 'docs/README.md'
-      - 'docs/guides/installation-and-updates.md'
-      - 'docs/guides/remote-projects-and-chats.md'
+      - 'docs/user/**'
+      - 'docs/marketing/work-digest.png'
       - 'README.md'
       - '.github/workflows/storybook-pages.yml'
 

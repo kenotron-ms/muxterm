@@ -4,17 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#eef3f4">
-    <meta name="description" content="Muxterm brings your existing coding agents, persistent terminals, files, and Work into one workspace you can return to from desktop or phone.">
+    <meta name="description" content="Start with one AI chat, hand off tasks to other agents, and see what needs your attention.">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Muxterm — a place to return to your work">
+    <meta property="og:title" content="Muxterm — one workspace for your AI agents">
     <meta property="og:description" content="Your agents, terminals, files, and Work in one persistent browser workspace.">
-    <meta property="og:image" content="https://kenotron-ms.github.io/muxterm/assets/workspace-desktop.webp">
+    <meta property="og:image" content="https://kenotron-ms.github.io/muxterm/assets/work-digest.png">
     <meta property="og:url" content="https://kenotron-ms.github.io/muxterm/">
     <meta name="twitter:card" content="summary_large_image">
     <link rel="canonical" href="https://kenotron-ms.github.io/muxterm/">
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
-    <title>Muxterm — a place to return to your work</title>
+    <title>Muxterm — one workspace for your AI agents</title>
     <script>
       // Storybook's former Pages root used ?path= deep links. Keep those links useful.
       if (/^\/(story|docs)\//.test(new URLSearchParams(location.search).get('path') || '')) {
@@ -29,76 +29,71 @@
       <nav aria-label="Main navigation">
         <a href="#why">Why Muxterm</a>
         <a href="#workflow">How it works</a>
-        <a href="storybook/">Storybook</a>
+        <a href="docs/">User guide</a>
       </nav>
-      <a class="header-action" href="https://github.com/kenotron-ms/muxterm">GitHub <span aria-hidden="true">↗</span></a>
+      <a class="header-action" href="docs/installation.html">Setup</a>
     </header>
 
     <main id="main">
       <section class="hero shell" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <h1 id="hero-title">A place to return <br>to your work.</h1>
-          <p class="hero-lede">Your existing coding agents, persistent terminals, files, and Work in one calm workspace. Open it at your desk. Pick it up on your phone.</p>
+          <h1 id="hero-title">Work with your AI agents in one place.</h1>
+          <p class="hero-lede">Start with one conversation. When you have more to do, give other agents tasks of their own and see what’s running, what’s finished, and what needs you.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#install">Get Muxterm <span aria-hidden="true">↘</span></a>
-            <a class="button button-secondary" href="https://github.com/kenotron-ms/muxterm">View on GitHub <span aria-hidden="true">↗</span></a>
+            <a class="button button-primary" href="docs/installation.html">Get started</a>
+            <a class="button button-secondary" href="#workflow">See how it works</a>
           </div>
-          <p class="hero-note">Self-hosted · macOS and Linux · terminal use needs no AI account</p>
+          <p class="hero-note">Runs on your Mac or Linux computer. Connect an AI agent you already use.</p>
         </div>
-        <div class="hero-proof">
-          <div class="proof-heading"><span class="live-indicator" aria-hidden="true"></span><span>A real workspace, ready when you are</span><span class="proof-caption">Desktop view</span></div>
-          <img src="assets/workspace-desktop.webp" width="1440" height="900" alt="Muxterm desktop workspace with two live terminal panes and the navigation sidebar" fetchpriority="high">
-        </div>
+        <figure class="hero-proof">
+          <img src="assets/work-digest.png" width="800" height="420" alt="Muxterm’s Work summary inside a chat, showing tasks to inspect or review alongside completed and ongoing work" fetchpriority="high">
+          <figcaption class="proof-heading">Open a task from the chat to see its progress or review the result.</figcaption>
+        </figure>
       </section>
 
-      <section class="continuity" id="why" aria-labelledby="continuity-title">
+      <section class="continuity" id="why" aria-labelledby="why-title">
         <div class="shell continuity-inner">
           <div class="continuity-copy">
-            <p class="section-kicker">Your tools stay yours</p>
-            <h2 id="continuity-title">Close the tab. <br>The shell stays.</h2>
-            <p>Muxterm's session daemon keeps real terminals running when your browser disconnects. Reconnect and return to the screen you left, even in a full-screen terminal app.</p>
-            <a class="text-link" href="https://github.com/kenotron-ms/muxterm#how-it-works">See how persistence works <span aria-hidden="true">↗</span></a>
+            <h2 id="why-title">See which tasks need your attention.</h2>
+            <p>Work gives each task a home. You can see who’s working on it, open the conversation behind it, or review the result when it’s ready.</p>
+            <a class="text-link" href="docs/work.html">Learn to delegate and review work</a>
           </div>
-          <div class="continuity-aside" aria-label="What stays in reach">
-            <div><span aria-hidden="true"></span><strong>Terminals</strong><p>Real shells and flexible panes remain live.</p></div>
-            <div><span aria-hidden="true"></span><strong>Chats</strong><p>Find supported agent sessions and their history.</p></div>
-            <div><span aria-hidden="true"></span><strong>Work</strong><p>See owners, progress, blockers, and the next action.</p></div>
+          <div class="continuity-aside" aria-label="Ways to use Muxterm">
+            <div><span aria-hidden="true"></span><strong>Chats</strong><p>Keep separate conversations for research, drafting, and review.</p></div>
+            <div><span aria-hidden="true"></span><strong>Files</strong><p>Open project documents beside the conversation to check what changed.</p></div>
+            <div><span aria-hidden="true"></span><strong>Terminal</strong><p>Open a shell when you need it. It stays running if you close the tab.</p></div>
           </div>
         </div>
       </section>
 
-      <section class="bring shell" aria-labelledby="bring-title">
-        <div class="section-heading">
-          <p class="section-kicker">Bring your setup</p>
-          <h2 id="bring-title">Keep the agents you already use.</h2>
-          <p>Muxterm works with Codex, Claude Code, and Amplifier using their own installed tools and sign-ins. Choose your harness in a project, then keep its conversation beside your terminal and files.</p>
-        </div>
-        <div class="harness-strip" aria-label="Supported agent harnesses"><span>Codex</span><span>Claude Code</span><span>Amplifier</span><span class="strip-note">Your accounts and model choices carry over</span></div>
-      </section>
-
-      <section class="anywhere shell" id="workflow" aria-labelledby="anywhere-title">
-        <div class="phone-proof"><img src="assets/workspace-phone.webp" width="390" height="844" loading="lazy" alt="Muxterm phone view with a new chat composer and supported harness selector"></div>
+      <section class="anywhere shell" id="workflow" aria-labelledby="workflow-title">
+        <div class="phone-proof"><img src="assets/workspace-phone.webp" width="390" height="844" loading="lazy" alt="Muxterm’s New chat screen on a phone, with a message box and agent picker"></div>
         <div class="anywhere-copy">
-          <p class="section-kicker">One place, different screens</p>
-          <h2 id="anywhere-title">Leave your desk. <br>Keep your place.</h2>
-          <p>Open the responsive browser workspace or install its PWA on your phone. Your sessions and Work remain on your Muxterm server. With a reachable home URL, you can check progress and steer from another screen.</p>
-          <div class="workflow-steps"><div><span>1</span><p><strong>Start at your desk.</strong> Open a terminal and a chat in your project.</p></div><div><span>2</span><p><strong>Give the work a destination.</strong> File a Work item with a clear outcome.</p></div><div><span>3</span><p><strong>Pick it up anywhere.</strong> Reopen your home Muxterm URL to see what happened.</p></div></div>
-          <a class="text-link" href="docs/remote-projects.html">Learn about remote projects</a>
+          <h2 id="workflow-title">From one chat to a shared project.</h2>
+          <div class="workflow-steps">
+            <div><span>1</span><p><strong>Start a chat.</strong> Choose a project folder and an agent. Ask it to help plan something you’re working on.</p></div>
+            <div><span>2</span><p><strong>Hand off a task.</strong> Ask the chat to draft a Work item. Review what it will deliver before you start it.</p></div>
+            <div><span>3</span><p><strong>Check the result.</strong> Open Work to see what happened. Open the worker’s chat or nearby files for the details.</p></div>
+          </div>
+          <a class="text-link" href="docs/first-chat.html">Follow the first-chat walkthrough</a>
         </div>
       </section>
 
       <section class="install" id="install" aria-labelledby="install-title">
         <div class="shell install-inner">
-          <div><p class="section-kicker">Get started</p><h2 id="install-title">Your workspace is one install away.</h2><p>Start locally with terminals. Add an agent when its own CLI is installed and signed in.</p><a class="text-link" href="docs/installation.html">Installation guide</a></div>
+          <div><h2 id="install-title">Start with an agent you know.</h2><p>Set up Muxterm on macOS or Linux, then open a chat with a supported agent such as Codex or Claude Code.</p><a class="button button-primary" href="docs/installation.html">Set up Muxterm</a></div>
           <div class="install-commands">
-            <div class="command"><span>macOS · Homebrew</span><code>brew install kenotron-ms/tap/muxterm</code></div>
-            <div class="command"><span>Linux</span><code>curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh | bash</code></div>
-            <p>Want to review the installer first? <a href="https://github.com/kenotron-ms/muxterm/blob/main/install.sh">Read install.sh</a>. <a href="https://github.com/kenotron-ms/muxterm/releases/latest">Releases and other downloads</a> are on GitHub.</p>
+            <h3>Before you start</h3>
+            <p>You’ll need a Mac or Linux computer and an account for the AI agent you plan to use. The setup guide walks you through installing Muxterm and connecting that agent.</p>
+            <a class="text-link" href="docs/">Browse the user guide</a>
           </div>
         </div>
       </section>
     </main>
 
-    <footer class="site-footer shell"><a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>muxterm</a><p>Built for the work that keeps going.</p><nav aria-label="Footer navigation"><a href="https://github.com/kenotron-ms/muxterm">GitHub</a><a href="docs/">Docs</a><a href="storybook/">Storybook</a></nav></footer>
+    <footer class="site-footer shell">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>muxterm</a>
+      <nav aria-label="Footer navigation"><a href="docs/">User guide</a><a href="https://github.com/kenotron-ms/muxterm">GitHub</a></nav>
+    </footer>
   </body>
 </html>
