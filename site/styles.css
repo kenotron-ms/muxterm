@@ -76,3 +76,15 @@ h2{font-size:clamp(41px,5vw,74px);line-height:1.04;letter-spacing:-.065em;font-w
 @media(max-width:650px){.shell,.site-header{width:calc(100% - 36px)}.site-header{height:65px}.site-header nav{display:none}.brand{font-size:22px}.header-action{font-size:13px;padding:9px 11px}.hero{padding-top:66px;padding-bottom:74px}h1{font-size:clamp(45px,12vw,72px);letter-spacing:-.075em;margin-bottom:25px}.hero-lede{font-size:18px}.hero-note{line-height:1.5;margin-bottom:36px}.hero-proof{border-radius:8px}.proof-heading{font-size:12px;padding:0 11px;min-height:40px}.proof-caption{display:none}.hero-proof img{aspect-ratio:1.5;object-fit:cover;object-position:left top}.continuity-inner,.anywhere,.install-inner{grid-template-columns:1fr}.continuity{padding:75px 0}.continuity-inner{gap:50px}.continuity-aside{align-self:stretch}.bring{padding:80px 0}.section-heading>p:not(.section-kicker),.continuity-copy>p:not(.section-kicker),.anywhere-copy>p:not(.section-kicker),.install-inner>div:first-child>p:not(.section-kicker){font-size:16px}.anywhere{gap:70px;padding-bottom:85px}.phone-proof{order:2;max-width:340px}.anywhere-copy{order:1}.install{padding:80px 0}.install-inner{gap:35px}.site-footer{padding:35px 0;min-height:0;flex-wrap:wrap}.site-footer p{width:100%;order:3}.site-footer nav{margin-left:auto;gap:17px}}
 @media(max-width:370px){.shell,.site-header{width:calc(100% - 28px)}.hero{padding-top:50px}h1{font-size:43px}.hero-actions{display:grid}.button{width:100%}.harness-strip span:not(.strip-note){font-size:13px;padding:0 10px}.site-footer nav{width:100%;margin-left:0}.command{padding:15px 12px}.command code{font-size:11px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.button{transition:none}}
+
+.docs-header nav{display:flex;gap:20px}
+.docs-header [aria-current="page"]{text-decoration:underline}
+.docs-content{max-width:760px;padding-block:clamp(44px,8vw,100px);line-height:1.65;overflow-wrap:anywhere}
+.docs-content h1{font-size:clamp(35px,6vw,64px);line-height:1.08;letter-spacing:-.055em}
+.docs-content h2{font-size:clamp(25px,4vw,36px);line-height:1.18;letter-spacing:-.035em;margin:2em 0 .65em}
+.docs-content h3{font-size:20px;margin:1.5em 0 .5em}
+.docs-content a{color:var(--blue)}
+.docs-content pre{overflow:auto;background:var(--slate);color:var(--paper);padding:16px;border-radius:7px;overflow-wrap:normal}
+.docs-content table{width:100%;border-collapse:collapse;font-size:.94rem}
+.docs-content th,.docs-content td{padding:.6em .5em;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.docs-content li+li{margin-top:.35em}

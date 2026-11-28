@@ -12,7 +12,8 @@
 Muxterm brings Codex, Claude Code, and Amplifier sessions together with persistent terminals, files, and trackable Work. Open the same responsive workspace at your desk or on your phone: the status stays clear, and the calm, palette-derived interface leaves room for the task.
 
 [Get started](#get-started) · [See the workflow](#a-good-first-workflow) · [Explore the features](#what-you-can-do) · [Download a release](https://github.com/kenotron-ms/muxterm/releases/latest)
-[Website](https://kenotron-ms.github.io/muxterm/) · [Documentation](docs/README.md) · [Storybook](https://kenotron-ms.github.io/muxterm/storybook/)
+
+[Website](https://kenotron-ms.github.io/muxterm/) · [Documentation](https://kenotron-ms.github.io/muxterm/docs/) · [Storybook](https://kenotron-ms.github.io/muxterm/storybook/)
 
 ## Why use muxterm?
 

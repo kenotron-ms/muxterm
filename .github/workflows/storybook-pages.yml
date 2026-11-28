@@ -8,12 +8,20 @@ on:
       - 'web/**'
       - 'site/**'
       - 'docs/design-system/**'
+      - 'docs/README.md'
+      - 'docs/guides/installation-and-updates.md'
+      - 'docs/guides/remote-projects-and-chats.md'
+      - 'README.md'
       - '.github/workflows/storybook-pages.yml'
   pull_request:
     paths:
       - 'web/**'
       - 'site/**'
       - 'docs/design-system/**'
+      - 'docs/README.md'
+      - 'docs/guides/installation-and-updates.md'
+      - 'docs/guides/remote-projects-and-chats.md'
+      - 'README.md'
       - '.github/workflows/storybook-pages.yml'
 
 permissions:

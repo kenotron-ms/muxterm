@@ -12,8 +12,9 @@ rm -rf pages-dist
 mkdir -p pages-dist/storybook
 cp -R site/index.html site/styles.css site/assets pages-dist/
 cp -R web/storybook-static/. pages-dist/storybook/
+node web/scripts/build-pages-docs.mjs
 touch pages-dist/.nojekyll
 
 test -f pages-dist/index.html
 test -f pages-dist/storybook/index.html
-echo 'Pages artifact ready: landing root + /storybook/'
+echo 'Pages artifact ready: landing root + /docs/ + /storybook/'
